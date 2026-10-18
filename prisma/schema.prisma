@@ -1,0 +1,390 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmployeeRole {
+  ADMIN
+  MANAGER
+}
+
+enum AvailabilityState {
+  AVAILABLE
+  ON_REQUEST
+}
+
+enum RequestContactMethod {
+  PHONE
+  TELEGRAM
+  MAX
+}
+
+enum RequestFulfillmentMode {
+  PICKUP
+  DELIVERY
+}
+
+model Brand {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  slug        String    @unique
+  description String    @default("")
+  logoMediaId String?   @map("logo_media_id")
+  logo        Media?    @relation("BrandLogo", fields: [logoMediaId], references: [id], onDelete: SetNull)
+  order       Int       @default(0)
+  products    Product[]
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@map("brands")
+}
+
+model ProductType {
+  id           String                @id @default(cuid())
+  name         String                @unique
+  slug         String                @unique
+  description  String                @default("")
+  imageMediaId String?               @map("image_media_id")
+  image        Media?                @relation("ProductTypeImage", fields: [imageMediaId], references: [id], onDelete: SetNull)
+  order        Int                   @default(0)
+  products     Product[]
+  categories   ProductTypeCategory[]
+  attributes   AttributeDefinition[]
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+
+  @@map("product_types")
+}
+
+model Category {
+  id           String                @id @default(cuid())
+  name         String
+  slug         String                @unique
+  description  String                @default("")
+  imageMediaId String?               @map("image_media_id")
+  image        Media?                @relation("CategoryImage", fields: [imageMediaId], references: [id], onDelete: SetNull)
+  parentId     String?               @map("parent_id")
+  parent       Category?             @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children     Category[]            @relation("CategoryTree")
+  products     Product[]             @relation("ProductCategory")
+  subproducts  Product[]             @relation("ProductSubcategory")
+  types        ProductTypeCategory[]
+  order        Int                   @default(0)
+  isVisible    Boolean               @default(true) @map("is_visible")
+  createdAt    DateTime              @default(now()) @map("created_at")
+  updatedAt    DateTime              @updatedAt @map("updated_at")
+
+  @@index([parentId, order])
+  @@map("categories")
+}
+
+model ProductTypeCategory {
+  productTypeId String      @map("product_type_id")
+  categoryId    String      @map("category_id")
+  productType   ProductType @relation(fields: [productTypeId], references: [id], onDelete: Cascade)
+  category      Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([productTypeId, categoryId])
+  @@map("product_type_categories")
+}
+
+model Color {
+  id        String         @id @default(cuid())
+  name      String         @unique
+  hex       String         @unique @db.Char(7)
+  images    ProductImage[]
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  @@map("colors")
+}
+
+model AttributeDefinition {
+  id            String                    @id @default(cuid())
+  productTypeId String?                   @map("product_type_id")
+  productType   ProductType?              @relation(fields: [productTypeId], references: [id], onDelete: Cascade)
+  name          String
+  slug          String
+  order         Int                       @default(0)
+  values        AttributeValue[]
+  variants      ProductVariantAttribute[]
+  createdAt     DateTime                  @default(now()) @map("created_at")
+  updatedAt     DateTime                  @updatedAt @map("updated_at")
+
+  @@unique([productTypeId, slug])
+  @@index([productTypeId, order])
+  @@map("attribute_definitions")
+}
+
+model AttributeValue {
+  id           String                    @id @default(cuid())
+  definitionId String                    @map("definition_id")
+  definition   AttributeDefinition       @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+  value        String
+  order        Int                       @default(0)
+  variants     ProductVariantAttribute[]
+
+  @@unique([definitionId, value])
+  @@index([definitionId, order])
+  @@map("attribute_values")
+}
+
+model Product {
+  id            String           @id @default(cuid())
+  slug          String           @unique
+  name          String
+  description   String           @default("")
+  brandId       String           @map("brand_id")
+  brand         Brand            @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  productTypeId String           @map("product_type_id")
+  productType   ProductType      @relation(fields: [productTypeId], references: [id], onDelete: Restrict)
+  categoryId    String           @map("category_id")
+  category      Category         @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: Restrict)
+  subcategoryId String?          @map("subcategory_id")
+  subcategory   Category?        @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: Restrict)
+  images        ProductImage[]
+  variants      ProductVariant[]
+  bestOffer     BestOffer?
+  isPublished   Boolean          @default(false) @map("is_published")
+  isArchived    Boolean          @default(false) @map("is_archived")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  @@index([brandId, productTypeId, categoryId])
+  @@index([isPublished, isArchived])
+  @@map("products")
+}
+
+model ProductVariant {
+  id             String                    @id @default(cuid())
+  productId      String                    @map("product_id")
+  product        Product                   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku            String                    @unique
+  combinationKey String                    @map("combination_key")
+  attributes     ProductVariantAttribute[]
+  inventory      Inventory[]
+  requestItems   RequestItem[]
+  isActive       Boolean                   @default(true) @map("is_active")
+  createdAt      DateTime                  @default(now()) @map("created_at")
+  updatedAt      DateTime                  @updatedAt @map("updated_at")
+
+  @@unique([productId, combinationKey])
+  @@index([productId, isActive])
+  @@map("product_variants")
+}
+
+model ProductVariantAttribute {
+  variantId    String              @map("variant_id")
+  definitionId String              @map("definition_id")
+  valueId      String              @map("value_id")
+  variant      ProductVariant      @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  definition   AttributeDefinition @relation(fields: [definitionId], references: [id], onDelete: Restrict)
+  value        AttributeValue      @relation(fields: [valueId], references: [id], onDelete: Restrict)
+
+  @@id([variantId, definitionId])
+  @@unique([variantId, valueId])
+  @@index([definitionId, valueId])
+  @@map("product_variant_attributes")
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  mediaId   String  @map("media_id")
+  media     Media   @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  colorId   String? @map("color_id")
+  color     Color?  @relation(fields: [colorId], references: [id], onDelete: SetNull)
+  alt       String  @default("")
+  order     Int     @default(0)
+
+  @@index([productId, colorId, order])
+  @@map("product_images")
+}
+
+model City {
+  id              String         @id @default(cuid())
+  name            String         @unique
+  slug            String         @unique
+  isActive        Boolean        @default(true) @map("is_active")
+  contactPhone    String?        @map("contact_phone")
+  pickupAddresses Json           @default("[]") @map("pickup_addresses")
+  workHours       String?        @map("work_hours")
+  socialLinks     Json           @default("[]") @map("social_links")
+  timezone        String?
+  order           Int            @default(0)
+  inventory       Inventory[]
+  employeeGrants  EmployeeCity[]
+  requests        Request[]
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  @@map("cities")
+}
+
+model Inventory {
+  variantId       String             @map("variant_id")
+  cityId          String             @map("city_id")
+  variant         ProductVariant     @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  city            City               @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  price           Decimal?           @db.Decimal(12, 2)
+  availability    AvailabilityState?
+  leadTimeMinDays Int?               @map("lead_time_min_days")
+  leadTimeMaxDays Int?               @map("lead_time_max_days")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  @@id([variantId, cityId])
+  @@map("inventory")
+}
+
+model Banner {
+  id             String   @id @default(cuid())
+  slotKey        String   @unique @map("slot_key")
+  name           String
+  description    String   @default("")
+  desktopMediaId String   @map("desktop_media_id")
+  mobileMediaId  String?  @map("mobile_media_id")
+  desktopMedia   Media    @relation("BannerDesktop", fields: [desktopMediaId], references: [id], onDelete: Restrict)
+  mobileMedia    Media?   @relation("BannerMobile", fields: [mobileMediaId], references: [id], onDelete: SetNull)
+  cta            String   @default("")
+  href           String   @default("")
+  order          Int      @default(0)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive, order])
+  @@map("banners")
+}
+
+model BestOffer {
+  id        String   @id @default(cuid())
+  productId String   @unique @map("product_id")
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label     String?
+  position  Int      @unique
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("best_offers")
+}
+
+model Media {
+  id                String         @id @default(cuid())
+  storageKey        String         @unique @map("storage_key")
+  originalName      String         @map("original_name")
+  mimeType          String         @map("mime_type")
+  byteSize          Int            @map("byte_size")
+  alt               String         @default("")
+  description       String         @default("")
+  productImages     ProductImage[]
+  brandLogos        Brand[]        @relation("BrandLogo")
+  productTypeImages ProductType[]  @relation("ProductTypeImage")
+  categoryImages    Category[]     @relation("CategoryImage")
+  desktopBanners    Banner[]       @relation("BannerDesktop")
+  mobileBanners     Banner[]       @relation("BannerMobile")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  @@index([mimeType, createdAt])
+  @@map("media")
+}
+
+model Employee {
+  id                    String            @id @default(cuid())
+  firstName             String            @map("first_name")
+  lastName              String            @default("") @map("last_name")
+  email                 String            @unique
+  phone                 String            @default("")
+  passwordHash          String            @map("password_hash")
+  role                  EmployeeRole      @default(MANAGER)
+  canManagePrices       Boolean           @default(false) @map("can_manage_prices")
+  canManageAvailability Boolean           @default(false) @map("can_manage_availability")
+  isActive              Boolean           @default(true) @map("is_active")
+  cities                EmployeeCity[]
+  sessions              EmployeeSession[]
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  @@map("employees")
+}
+
+model EmployeeCity {
+  employeeId String   @map("employee_id")
+  cityId     String   @map("city_id")
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  city       City     @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@id([employeeId, cityId])
+  @@map("employee_cities")
+}
+
+model EmployeeSession {
+  id         String   @id @default(cuid())
+  employeeId String   @map("employee_id")
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique @map("token_hash")
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([employeeId, expiresAt])
+  @@map("employee_sessions")
+}
+
+model LoginThrottle {
+  keyHash       String   @id @map("key_hash")
+  windowStarted DateTime @map("window_started")
+  attempts      Int      @default(0)
+  expiresAt     DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("login_throttles")
+}
+
+model Request {
+  id                  String                 @id @default(cuid())
+  requestNumber       String                 @unique @map("request_number")
+  idempotencyKey      String                 @unique @map("idempotency_key")
+  cityId              String                 @map("city_id")
+  city                City                   @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  contactMethod       RequestContactMethod   @map("contact_method")
+  fulfillmentMode     RequestFulfillmentMode @map("fulfillment_mode")
+  encryptedPiiPayload String?                @map("encrypted_pii_payload")
+  piiExpiresAt        DateTime?              @map("pii_expires_at")
+  total               Decimal?               @db.Decimal(12, 2)
+  items               RequestItem[]
+  createdAt           DateTime               @default(now()) @map("created_at")
+
+  @@index([cityId, createdAt])
+  @@index([piiExpiresAt])
+  @@map("requests")
+}
+
+model RequestItem {
+  id              String          @id @default(cuid())
+  requestId       String          @map("request_id")
+  request         Request         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  variantId       String?         @map("variant_id")
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  productName     String          @map("product_name")
+  skuSnapshot     String          @map("sku_snapshot")
+  variantSnapshot Json            @map("variant_snapshot")
+  quantity        Int
+  unitPrice       Decimal?        @map("unit_price") @db.Decimal(12, 2)
+
+  @@index([requestId])
+  @@map("request_items")
+}
+
+model SiteSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("site_settings")
+}

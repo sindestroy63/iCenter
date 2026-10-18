@@ -1,0 +1,53 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated Next.js output
+node_modules/
+.next/
+out/
+
+# Local reports, scratch files and test artifacts
+.tmp/
+tmp/
+coverage/
+playwright-report/
+test-results/
+
+# Local backups and archives
+*.bak
+*.bak.*
+*.backup
+*.backup.*
+*.old
+*.orig
+*.rej
+*.dump
+*.dump.*
+*.pgdump
+*.pgdump.*
+*.sql.gz
+*.sql.bz2
+*-backup.sql
+*_backup.sql
+*.backup.sql
+*.zip
+*.7z
+*.tar
+*.tgz
+backups/
+backup/
+
+# Logs and local OS/editor files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
