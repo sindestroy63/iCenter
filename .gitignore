@@ -6,14 +6,21 @@
 # Dependencies and generated Next.js output
 node_modules/
 .next/
+.next-*/
 out/
 
 # Local reports, scratch files and test artifacts
 .tmp/
+.tmp-*
+**/.tmp-*
 tmp/
+/tmp-iphone18.png
 coverage/
 playwright-report/
 test-results/
+
+# Runtime media lives outside version control; app/uploads contains the serving route
+/uploads/
 
 # Local backups and archives
 *.bak
@@ -51,3 +58,6 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 Thumbs.db
+
+# TypeScript incremental build cache
+*.tsbuildinfo

@@ -95,6 +95,7 @@ model ProductTypeCategory {
 model Color {
   id        String         @id @default(cuid())
   name      String         @unique
+  nameRu    String?
   hex       String         @unique @db.Char(7)
   images    ProductImage[]
   createdAt DateTime       @default(now()) @map("created_at")
@@ -149,6 +150,9 @@ model Product {
   images        ProductImage[]
   variants      ProductVariant[]
   bestOffer     BestOffer?
+  relatedProducts ProductRelatedProduct[] @relation("RelatedProductSource")
+  relatedFrom     ProductRelatedProduct[] @relation("RelatedProductTarget")
+  tradeInLeads    TradeInLead[]
   isPublished   Boolean          @default(false) @map("is_published")
   isArchived    Boolean          @default(false) @map("is_archived")
   createdAt     DateTime         @default(now()) @map("created_at")
@@ -220,6 +224,7 @@ model City {
   inventory       Inventory[]
   employeeGrants  EmployeeCity[]
   requests        Request[]
+  tradeInLeads    TradeInLead[]
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
@@ -244,6 +249,7 @@ model Inventory {
 model Banner {
   id             String   @id @default(cuid())
   slotKey        String   @unique @map("slot_key")
+  placement      String   @default("home")
   name           String
   description    String   @default("")
   desktopMediaId String   @map("desktop_media_id")
@@ -379,6 +385,42 @@ model RequestItem {
 
   @@index([requestId])
   @@map("request_items")
+}
+
+model ProductRelatedProduct {
+  productId        String  @map("productId")
+  relatedProductId String  @map("relatedProductId")
+  sortOrder        Int     @default(0) @map("sortOrder")
+  product          Product @relation("RelatedProductSource", fields: [productId], references: [id], onDelete: Cascade)
+  relatedProduct   Product @relation("RelatedProductTarget", fields: [relatedProductId], references: [id], onDelete: Cascade)
+
+  @@id([productId, relatedProductId])
+  @@unique([productId, sortOrder])
+  @@index([relatedProductId])
+  @@map("product_related_products")
+}
+
+model TradeInLead {
+  id                  String   @id
+  requestNumber       String   @unique @map("requestNumber")
+  idempotencyKey      String   @unique @map("idempotencyKey")
+  requestHash         String   @map("requestHash")
+  cityId              String   @map("cityId")
+  city                City     @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  productId           String?  @map("productId")
+  product             Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productNameSnapshot String?  @map("productNameSnapshot")
+  encryptedPiiPayload String   @map("encryptedPiiPayload")
+  source              String   @default("trade_in")
+  status              String   @default("NEW")
+  consentAt           DateTime @map("consentAt")
+  consentVersion      String   @map("consentVersion")
+  createdAt           DateTime @default(now()) @map("createdAt")
+  updatedAt           DateTime @updatedAt @map("updatedAt")
+
+  @@index([cityId, createdAt])
+  @@index([status, createdAt])
+  @@map("trade_in_requests")
 }
 
 model SiteSetting {
