@@ -1,55 +1,137 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronLeft, ChevronRight, Expand, Heart, MapPin, Minus, Plus, ShoppingCart, Truck, X } from "lucide-react";
-import { useStoreState } from "./StoreState";
-import { cities, getProduct, type StoreProduct, type StoreVariant } from "./storeData";
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Gamepad2, Grid2X2, Heart, House, Laptop, Minus, PackageOpen, Plus, ShoppingCart, Smartphone, Tablet } from "lucide-react";
+import { formatCartVariantDetails, useStoreState } from "./StoreState";
+import ProductDetailsLower from "./ProductDetailsLower";
+import { productImage, variantAttribute, type CatalogProductDto, type CatalogVariantDto } from "./catalogClient";
+import { compareMemoryValues } from "@/lib/product-dictionaries";
+import { catalogColorDetails, catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
+import ColorName from "./ColorName";
 
-function firstVariant(product: StoreProduct) {
-  return product.variants.find((variant) => variant.memory === "256 ГБ" && variant.sim === "eSIM") ?? product.variants[0];
+function canonicalAttributeKey(key: string) { return key === "memory" ? "storage" : key === "sim" ? "simType" : key; }
+function productVariantAttribute(variant: CatalogVariantDto, key: string) {
+  const direct = variantAttribute(variant, key);
+  if (direct) return direct;
+  const alias = key === "storage" ? "memory" : key === "simType" ? "sim" : "";
+  return alias ? variantAttribute(variant, alias) : "";
 }
 
+function formatPrice(value: string | null) { return value === null ? "Уточняйте цену" : `${Number(value).toLocaleString("ru-RU")} ₽`; }
+function availabilityText(value: CatalogVariantDto["availability"]) { return value === "IN_STOCK" ? "В наличии" : value === "PREORDER" ? "Под заказ 1–2 дня" : value === "OUT_OF_STOCK" ? "Нет в наличии" : "Уточняйте наличие"; }
+const categoryIcons = { smartphones: Smartphone, tablets: Tablet, laptops: Laptop, appliances: House, consoles: Gamepad2 };
+
 export default function ProductView({ slug }: { slug: string }) {
-  const product = getProduct(slug);
   const { city, addToCart, toggleFavorite, isFavorite } = useStoreState();
+  const [product, setProduct] = useState<CatalogProductDto | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [selection, setSelection] = useState("");
   const [image, setImage] = useState(0);
+  const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   const [quantity, setQuantity] = useState(1);
-  const [lightbox, setLightbox] = useState(false);
-  const initial = product ? firstVariant(product) : undefined;
-  const [selection, setSelection] = useState<StoreVariant>(initial ?? { id: "" });
-
-  const galleryImages = useMemo(() => {
+  const [added, setAdded] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController(); setLoading(true); setError(false); setProduct(null); setSelection(""); setImage(0); setFailedImages(new Set());
+    fetch(`/api/catalog/products/${encodeURIComponent(slug)}?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" })
+      .then(async (r) => { if (!r.ok) throw new Error("Product not found"); return r.json() as Promise<{ data: CatalogProductDto }>; })
+      .then((body) => { if (!body.data?.variants) throw new Error("Invalid product response"); setProduct(body.data); setSelection(body.data.variants[0]?.id ?? ""); })
+      .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(true); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [slug, city]);
+  const variants = product?.variants ?? [];
+  const selectedVariant = variants.find((v) => v.id === selection) ?? variants[0];
+  useEffect(() => { setImage(0); }, [selectedVariant?.color?.id]);
+  const images = useMemo(() => {
     if (!product) return [];
-    const colorImage = product.colors?.find((color) => color.label === selection.color)?.image;
-    return Array.from(new Set([colorImage, ...product.images].filter((value): value is string => Boolean(value))));
-  }, [product, selection.color]);
-  const selectedVariant = product?.variants.find((variant) => variant.id === selection.id) ?? product?.variants[0];
-  const availableColors = Array.from(new Set(product?.variants.map((variant) => variant.color).filter(Boolean) as string[]));
-  const availableMemory = Array.from(new Set(product?.variants.filter((variant) => !selection.color || variant.color === selection.color).map((variant) => variant.memory).filter(Boolean) as string[]));
-  const availableSim = Array.from(new Set(product?.variants.filter((variant) => (!selection.color || variant.color === selection.color) && (!selection.memory || variant.memory === selection.memory)).map((variant) => variant.sim).filter(Boolean) as string[]));
-  const cityName = cities.find((item) => item.slug === city)?.name ?? city;
-
-  if (!product) return <div className="container empty-state product-not-found"><h1>Товар не найден</h1><p>Такого товара нет в локальном каталоге.</p><Link href="/catalog">Вернуться в каталог</Link></div>;
-
-  const choose = (field: keyof StoreVariant, value: string) => {
-    const next = product.variants.find((variant) => variant[field] === value && Object.entries(selection).every(([key, current]) => key === field || key === "id" || !current || variant[key as keyof StoreVariant] === current))
-      ?? product.variants.find((variant) => variant[field] === value);
-    if (next) { setSelection(next); setImage(0); }
+    const colorImages = selectedVariant?.color ? product.images.filter((entry) => entry.colorId === selectedVariant.color?.id) : [];
+    const sharedImages = product.images.filter((entry) => entry.colorId === null);
+    return (colorImages.length ? colorImages : sharedImages).filter((entry) => entry.src);
+  }, [product, selectedVariant]);
+  const visibleImages = images.filter((entry) => entry.src && !failedImages.has(entry.id));
+  const markImageFailed = (id: string) => {
+    setFailedImages((current) => new Set(current).add(id));
+    setImage(0);
   };
-  const add = () => { if (!selectedVariant) return; addToCart({ variantId: selectedVariant.id, slug: product.slug, name: product.name, image: galleryImages[0] ?? product.image, details: [selectedVariant.color, selectedVariant.memory, selectedVariant.sim, selectedVariant.ram, selectedVariant.connectivity].filter(Boolean).join(" · ") || product.detail }, quantity); };
-  const favorite = isFavorite(product.slug);
+  const favorite = isFavorite(slug);
+  const isIphone = product?.brand.slug === "apple" && product.category.slug === "smartphones";
+  const attrs = Array.from(new Set(variants.flatMap((v) => Object.keys(v.attributes ?? {}).map(canonicalAttributeKey))))
+    .filter((key) => !isIphone || ["storage", "simType"].includes(key));
+  const resolveSelection = (override: { key?: string; value?: string; colorId?: string } = {}) => {
+    if (!selectedVariant) return undefined;
+    const currentColorId = selectedVariant.color?.id ?? "";
+    const matchesRequested = variants.filter((candidate) => {
+      if (override.colorId !== undefined && (candidate.color?.id ?? "") !== override.colorId) return false;
+      if (override.key !== undefined && productVariantAttribute(candidate, override.key) !== override.value) return false;
+      return true;
+    });
+    if (!matchesRequested.length) return undefined;
 
-  return <div className="product-page container">
-    <div className="product-breadcrumbs"><Link href="/">Главная</Link><span>›</span><Link href="/catalog">Каталог</Link><span>›</span><span>{product.brand}</span><span>›</span><span>{product.name}</span></div>
+    const exact = matchesRequested.find((candidate) => {
+      if (override.colorId === undefined && (candidate.color?.id ?? "") !== currentColorId) return false;
+      return attrs.every((key) => key === override.key || productVariantAttribute(candidate, key) === productVariantAttribute(selectedVariant, key));
+    });
+    if (exact) return exact;
+
+    return matchesRequested
+      .map((candidate, index) => {
+        const sameColor = (candidate.color?.id ?? "") === currentColorId;
+        const preservedAttributes = attrs.reduce((score, key) => score + (key !== override.key && productVariantAttribute(candidate, key) === productVariantAttribute(selectedVariant, key) ? 1 : 0), 0);
+        return { candidate, index, score: preservedAttributes + (override.colorId === undefined && sameColor ? 1 : 0), sameColor };
+      })
+      .sort((left, right) => right.score - left.score || Number(right.sameColor) - Number(left.sameColor) || left.index - right.index)[0]?.candidate;
+  };
+  const setVariantAttribute = (key: string, value: string) => {
+    const next = resolveSelection({ key, value });
+    if (next) setSelection(next.id);
+  };
+  const setVariantColor = (colorId: string) => {
+    const next = resolveSelection({ colorId });
+    if (next) setSelection(next.id);
+  };
+  const valueAvailable = (key: string, value: string) => variants.some((candidate) => productVariantAttribute(candidate, key) === value);
+  const colorAvailable = (colorId: string) => variants.some((candidate) => candidate.color?.id === colorId);
+  const add = () => { if (!product || !selectedVariant) return; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, selectedVariant.label), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
+
+  if (loading) return <div className="layout-container loading-state">Загрузка товара…</div>;
+  if (error || !product) return <div className="layout-container empty-state product-not-found"><h1>{error ? "Не удалось загрузить товар" : "Товар не найден"}</h1><p>{error ? "Проверьте соединение и повторите попытку." : "Опубликованный товар недоступен для выбранного города."}</p><Link href="/catalog">Вернуться в каталог</Link></div>;
+  const CategoryIcon = categoryIcons[product.category.slug as keyof typeof categoryIcons] ?? Grid2X2;
+  return <div className="product-page layout-container">
     <div className="product-layout">
-      <section className="product-gallery"><div className="product-thumbs">{galleryImages.map((src, index) => <button key={`${src}-${index}`} className={index === image ? "active" : ""} onClick={() => setImage(index)}><img src={src} alt={`${product.name}, изображение ${index + 1}`} /></button>)}</div><div className="product-main-image"><button className="gallery-nav prev" onClick={() => setImage((image - 1 + galleryImages.length) % galleryImages.length)} aria-label="Предыдущее фото"><ChevronLeft /></button><button className="gallery-image-button" onClick={() => setLightbox(true)} aria-label="Открыть изображение"><img src={galleryImages[image] ?? product.image} alt={product.name} /></button><button className="gallery-nav next" onClick={() => setImage((image + 1) % galleryImages.length)} aria-label="Следующее фото"><ChevronRight /></button><button className="gallery-expand" onClick={() => setLightbox(true)} aria-label="Развернуть изображение"><Expand size={17} /></button></div></section>
-      <section className="product-info"><div className="product-title-row"><span className="product-badge">Демонстрационная карточка</span><button className={`product-favorite ${favorite ? "active" : ""}`} onClick={() => toggleFavorite(product.slug)} aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"}><Heart fill={favorite ? "currentColor" : "none"} /></button></div><h1>{product.name}</h1><h2>{product.detail}</h2><div className="purchase-card"><div className="availability"><span className="availability-dot" />Уточнить наличие в  {cityName}</div><div className="product-price">Уточнить цену</div><p className="price-note">Демонстрационная карточка. Актуальная цена и наличие из БД не подключены.</p><hr />
-        {product.colors?.length ? <fieldset><legend>Цвет:  <b>{selection.color}</b></legend><div className="color-options">{product.colors.map((color) => <button key={color.label} className={selection.color === color.label ? "selected" : ""} style={{ background: color.value }} disabled={!availableColors.includes(color.label)} onClick={() => choose("color", color.label)} aria-label={color.label} />)}</div></fieldset> : null}
-        {availableMemory.length ? <fieldset><legend>Объем памяти:  <b>{selection.memory}</b></legend><div className="option-grid">{availableMemory.map((value) => <button key={value} className={selection.memory === value ? "selected" : ""} onClick={() => choose("memory", value)}>{value}</button>)}</div></fieldset> : null}
-        {availableSim.length ? <fieldset><legend>SIM-карта:  <b>{selection.sim}</b></legend><div className="sim-options">{availableSim.map((value) => <button key={value} className={selection.sim === value ? "selected" : ""} onClick={() => choose("sim", value)}>{value}</button>)}</div></fieldset> : null}
-        {selectedVariant ? <><div className="product-quantity"><span>Количество</span><div><button onClick={() => setQuantity((value) => Math.max(1, value - 1))} aria-label="Уменьшить количество"><Minus size={15} /></button><b>{quantity}</b><button onClick={() => setQuantity((value) => value + 1)} aria-label="Увеличить количество"><Plus size={15} /></button></div></div><button className="add-cart" onClick={add}><ShoppingCart size={21} />Добавить в корзину</button></> : <p className="variant-unavailable">Подтвержденные варианты пока не загружены, добавление в корзину недоступно.</p>}<Link className="buy-now" href="/cart">Перейти в корзину</Link><div className="delivery-grid"><div><Truck /><b>Доставка по  {cityName}</b><span>Уточняется при оформлении заявки</span></div><div><MapPin /><b>Самовывоз</b><span>Адрес уточняется по городу</span></div></div></div></section>
-    </div><section className="product-description"><h2>Описание</h2><p>{product.description}</p></section>
-    {lightbox && <div className="image-lightbox" role="dialog" aria-modal="true"><button onClick={() => setLightbox(false)} aria-label="Закрыть изображение"><X /></button><img src={galleryImages[image] ?? product.image} alt={product.name} /></div>}
+      <section className="product-gallery" aria-label="Фотографии товара">
+        <div className="product-main-image">
+          {visibleImages.length > 1 && <>
+            <button type="button" className="gallery-nav prev" onClick={() => setImage((image - 1 + visibleImages.length) % visibleImages.length)} aria-label="Предыдущее фото"><ArrowLeft /></button>
+            <button type="button" className="gallery-nav next" onClick={() => setImage((image + 1) % visibleImages.length)} aria-label="Следующее фото"><ArrowRight /></button>
+          </>}
+          <div className={`gallery-image-button${visibleImages[image] ? "" : " is-empty"}`} aria-live="polite">
+            {visibleImages[image]?.src ? <img key={visibleImages[image].id} className="gallery-main-photo" src={visibleImages[image].src!} alt={visibleImages[image].alt || product.name} onError={() => markImageFailed(visibleImages[image].id)} /> : <><PackageOpen size={58} aria-hidden="true" /><span>Фото скоро появится</span></>}
+          </div>
+          {visibleImages.length > 1 && <div className="gallery-dots" aria-label="Выбрать фотографию">{visibleImages.map((entry, index) => <button key={entry.id} type="button" className={index === image ? "active" : ""} aria-label={`Фото ${index + 1}`} aria-current={index === image ? "true" : undefined} onClick={() => setImage(index)} />)}</div>}
+        </div>
+        <div className="product-thumbs" aria-label="Миниатюры фотографий">{visibleImages.map((entry, index) => <button key={entry.id} type="button" className={index === image ? "active" : ""} onClick={() => setImage(index)} aria-label={`Показать фото ${index + 1}`} aria-pressed={index === image}><img src={entry.src!} alt={entry.alt || `${product.name}, изображение ${index + 1}`} onError={() => markImageFailed(entry.id)} /></button>)}</div>
+      </section>
+      <section className="product-info" aria-label="Информация о товаре">
+        <div className="product-title-row">
+          <Link className="product-category-badge" href={`/catalog?category=${encodeURIComponent(product.category.slug)}`}><CategoryIcon size={16} aria-hidden="true" /><span>{product.category.name}</span><ChevronRight size={15} className="category-badge-arrow" aria-hidden="true" /></Link>
+          <button type="button" className={`product-favorite ${favorite ? "active" : ""}`} onClick={() => toggleFavorite(slug)} aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite}><Heart fill={favorite ? "currentColor" : "none"} /></button>
+        </div>
+        <h1>{product.name}</h1>
+        <div className="availability"><span className={`availability-dot availability-dot-${selectedVariant?.availability?.toLowerCase() ?? "unspecified"}`} aria-hidden="true" />{selectedVariant ? availabilityText(selectedVariant.availability) : "Нет доступных вариантов"}</div>
+        <hr className="product-divider product-availability-divider" />
+        <div className="product-price">{formatPrice(selectedVariant?.price ?? null)}</div>
+        <p className="price-note">Цена и наличие указаны для выбранного города и варианта.</p>
+        <hr className="product-divider" />
+        <div className="product-options">
+          {selectedVariant?.color && <fieldset className="product-color-fieldset"><legend><span>Цвет</span><ColorName color={selectedVariant.color} /></legend><div className="color-options">{Array.from(new Map(variants.filter((v) => v.color).map((v) => [v.color!.id, v.color!])).values()).map((color) => { const hex=catalogColorHex(color); const label=catalogColorLabel(color); return <button key={color.id} type="button" className={`${selectedVariant.color?.id === color.id ? "selected" : ""}${hex ? "" : " neutral-color"}`} style={hex ? { background: hex } : undefined} onClick={() => setVariantColor(color.id)} disabled={!colorAvailable(color.id)} aria-label={label} title={label} aria-pressed={selectedVariant.color?.id === color.id} />; })}</div></fieldset>}
+          {attrs.map((key) => { const values = Array.from(new Set(variants.map((v) => productVariantAttribute(v, key)).filter(Boolean))).sort(key === "storage" ? compareMemoryValues : undefined); if (!values.length) return null; const selectedValue = productVariantAttribute(selectedVariant!, key); const label = key === "storage" ? "Объём памяти" : key === "simType" ? "SIM-карта" : key === "ram" ? "Оперативная память" : key === "connectivity" ? "Подключение" : key === "size" ? "Размер" : key === "material" ? "Материал" : key; return <fieldset key={key}><legend>{label}: <b>{selectedValue || "Не указано"}</b></legend><div className="option-grid">{values.map((value) => <button key={value} type="button" className={selectedValue === value ? "selected" : ""} onClick={() => setVariantAttribute(key, value)} disabled={!valueAvailable(key, value)} aria-pressed={selectedValue === value}>{value}</button>)}</div></fieldset>; })}
+        </div>
+        <hr className="product-divider product-options-divider" />
+        {selectedVariant ? <div className="product-purchase-actions"><div className="product-quantity"><span>Количество</span><div><button type="button" onClick={() => setQuantity((v) => Math.max(1, v - 1))} aria-label="Уменьшить количество"><Minus size={16} /></button><b>{quantity}</b><button type="button" onClick={() => setQuantity((v) => v + 1)} aria-label="Увеличить количество"><Plus size={16} /></button></div></div><button type="button" className={`add-cart${added ? " added" : ""}`} onClick={add}>{added ? <Check size={20} /> : <ShoppingCart size={20} />}{added ? "Добавлено в корзину" : "Добавить в корзину"}</button></div> : <p className="variant-unavailable">Этот вариант недоступен в выбранном городе.</p>}
+      </section>
+    </div>
+    <ProductDetailsLower product={product} city={city} />
   </div>;
 }

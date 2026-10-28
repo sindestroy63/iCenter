@@ -1,4 +1,5 @@
 import CatalogView from "@/components/CatalogView";
+import { notFound } from "next/navigation";
 
 const categories: Record<string, string> = {
   smartphones: "Смартфоны",
@@ -11,6 +12,7 @@ const categories: Record<string, string> = {
 export default function CatalogSlugPage({ params }: { params: { slug: string[] } }) {
   const slug = params.slug.at(-1) ?? "";
   const category = categories[slug];
+  if (!category) notFound();
   const label = category ?? params.slug.map((part) => decodeURIComponent(part)).join(" / ");
-  return <CatalogView title={label || "Каталог"} crumb={label || "Каталог"} category={category ?? ""} />;
+  return <CatalogView title={label || "Каталог"} category={category ? slug : ""} />;
 }
