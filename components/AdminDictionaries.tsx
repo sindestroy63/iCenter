@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
-import { DICTIONARY_REGISTRY, type DictionaryCode } from "@/lib/product-dictionaries";
+import { ADMIN_DICTIONARY_REGISTRY, DICTIONARY_REGISTRY, type DictionaryCode } from "@/lib/product-dictionaries";
 import { catalogColorHex, catalogColorNames } from "@/lib/catalog-colors";
 import ColorName from "@/components/ColorName";
 
@@ -13,7 +13,7 @@ const keyPart = (value: string) => value.toLowerCase().normalize("NFKD").replace
 const csrf = () => decodeURIComponent(document.cookie.split("; ").find((item) => item.startsWith("icenter_csrf="))?.split("=")[1] ?? "");
 
 export default function AdminDictionaries({ initialCode = "brand" }: { initialCode?: DictionaryCode }) {
-  const [code, setCode] = useState<DictionaryCode>(initialCode);
+  const [code, setCode] = useState<DictionaryCode>(ADMIN_DICTIONARY_REGISTRY.some((item) => item.code === initialCode) ? initialCode : "brand");
   const [payload, setPayload] = useState<ApiData | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [query, setQuery] = useState("");
@@ -95,7 +95,7 @@ export default function AdminDictionaries({ initialCode = "brand" }: { initialCo
   return <main className="admin-content admin-workspace admin-dictionaries">
     <div className="workspace-head dictionary-page-head"><div className="dictionary-heading-copy"><span>Управление каталогом</span><h1>Справочники</h1><p>Единые значения для товаров, вариантов и характеристик</p></div>{payload?.canWrite && <button className="admin-primary" onClick={() => openEditor()}><Plus size={16} />Добавить значение</button>}</div>
     <div className="dictionary-layout">
-      <aside className="dictionary-nav" aria-label="Справочники">{DICTIONARY_REGISTRY.map((item) => <button key={item.code} className={code === item.code ? "active" : ""} onClick={() => { setCode(item.code); setQuery(""); setEditing(null); }}>{labels[item.code]}</button>)}</aside>
+      <aside className="dictionary-nav" aria-label="Справочники">{ADMIN_DICTIONARY_REGISTRY.map((item) => <button key={item.code} className={code === item.code ? "active" : ""} onClick={() => { setCode(item.code); setQuery(""); setEditing(null); }}>{labels[item.code]}</button>)}</aside>
       <section className="dictionary-content">
         <div className="dictionary-toolbar"><div><h2>{labels[code]}</h2><p>{visible.length} из {entries.length} значений</p></div><label className="admin-field-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по названию или ключу" /></label></div>
         {error ? <div className="empty-state"><p>{error}</p><button className="admin-secondary" onClick={() => void load(code)}>Повторить</button></div> : <div className="workspace-table panel dictionary-table"><table className="table"><thead><tr><th>Название</th>{code === "productModel" && <><th>Бренд</th><th>Тип товара</th></>}<th>Статус</th><th /></tr></thead><tbody>{visible.map((entry) => { const colorHex=code === "color" ? catalogColorHex({ name:entry.nameEn ?? entry.label,hex:entry.hex }) : null; return <tr key={entry.id}><td><span className="dictionary-entry-name">{code === "color" && <i className={colorHex ? "dictionary-color-swatch" : "dictionary-color-swatch neutral-color"} style={colorHex ? { background:colorHex } : undefined} aria-hidden="true" />}<span>{code === "color" ? <ColorName color={{ name:entry.nameEn ?? entry.label,nameRu:entry.nameRu }} /> : <strong>{entry.label}</strong>}{code === "color" && <small>{entry.hex || colorHex || "HEX не указан"}</small>}{entry.aliases.length > 0 && <small>Алиасы: {entry.aliases.join(", ")}</small>}</span></span></td>{code === "productModel" && <><td>{brandName(entry.brandId)}</td><td>{typeName(entry.globalProductTypeId)}</td></>}<td><span className={entry.isActive ? "dictionary-status active" : "dictionary-status"}>{entry.isActive ? "Активно" : "Архив"}</span></td><td>{payload?.canWrite && <span className="row-actions"><button className="icon-action" onClick={() => openEditor(entry)} aria-label="Изменить" title="Изменить"><Pencil size={15} /></button><button className="icon-action danger" onClick={() => void removeEntry(entry)} disabled={busy} aria-label="Удалить" title="Удалить"><Trash2 size={15} /></button></span>}</td></tr>; })}</tbody></table>{visible.length === 0 && <p className="dictionary-empty">В этом справочнике пока нет записей.</p>}</div>}

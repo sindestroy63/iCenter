@@ -20,7 +20,7 @@ export function uploadRoot() {
 }
 
 export function uploadFilePath(storagePath: string) {
-  if (!/^uploads\/[0-9]{4}\/[0-9]{2}\/[a-f0-9-]+\.(?:jpg|png|webp|avif)$/.test(storagePath)) throw new Error("Invalid storage path");
+  if (!/^uploads\/[0-9]{4}\/[0-9]{2}\/[a-f0-9-]+\.(?:jpg|png|webp|avif|mp4|webm)$/.test(storagePath)) throw new Error("Invalid storage path");
   const root = uploadRoot();
   const file = path.resolve(root, storagePath.slice("uploads/".length));
   if (!file.startsWith(root + path.sep)) throw new Error("Invalid storage path");

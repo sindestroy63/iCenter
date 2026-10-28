@@ -46,10 +46,8 @@ async function save(request: Request, update: boolean) {
     if (value.linkUrl && !((value.linkUrl.startsWith("/") && !value.linkUrl.startsWith("//")) || /^https:\/\//i.test(value.linkUrl))) return NextResponse.json({ error: "INVALID_LINK" }, { status: 400 });
     const db = adminDb();
     if (value.imageMediaId) {
-      const media = value.placement === "home"
-        ? await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id=${value.imageMediaId} AND "mimeType" IN ('image/jpeg','image/png','image/webp','image/avif') LIMIT 1`
-        : await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id=${value.imageMediaId} AND "mimeType" IN ('image/jpeg','image/png','image/webp') LIMIT 1`;
-      if (!media.length) return NextResponse.json({ error: "INVALID_IMAGE" }, { status: 400 });
+      const media = await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id=${value.imageMediaId} AND "mimeType" IN ('image/jpeg','image/png','image/webp','video/mp4','video/webm') LIMIT 1`;
+      if (!media.length) return NextResponse.json({ error: "INVALID_MEDIA" }, { status: 400 });
     }
     const saved = await db.$transaction(async (tx) => {
       if (update) {

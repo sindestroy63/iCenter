@@ -1,29 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId, uploadFilePath, uploadRoot } from "@/lib/admin-db";
-import { mkdir, rename, rm, writeFile, realpath } from "node:fs/promises";
+import { acceptedExtensions, bannerVideoMaxBytes, detectUploadMedia, IMAGE_UPLOAD_MAX_BYTES } from "@/lib/media-upload";
+import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-const MAX_BYTES = 10 * 1024 * 1024;
-const signatures = [
-  { mime: "image/jpeg", ext: "jpg", test: (b: Buffer) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-  { mime: "image/png", ext: "png", test: (b: Buffer) => b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) },
-  { mime: "image/webp", ext: "webp", test: (b: Buffer) => b.length >= 12 && b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WEBP" },
-  { mime: "image/avif", ext: "avif", test: (b: Buffer) => {
-    if (b.length < 16 || b.toString("ascii", 4, 8) !== "ftyp") return false;
-    const boxSize = b.readUInt32BE(0);
-    if (boxSize < 16 || boxSize > b.length) return false;
-    const majorBrand = b.toString("ascii", 8, 12);
-    if (majorBrand === "avif" || majorBrand === "avis") return true;
-    for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
-      const brand = b.toString("ascii", offset, offset + 4);
-      if (brand === "avif" || brand === "avis") return true;
-    }
-    return false;
-  } },
-];
 
 export async function GET() {
   try {
@@ -39,8 +22,11 @@ export async function GET() {
           OR EXISTS(SELECT 1 FROM users u WHERE u."avatarMediaId" = m.id)) AS used
       FROM media m ORDER BY m."uploadedAt" DESC
     `;
-    return NextResponse.json({ data: rows.map(row => ({ ...row, url: `/${row.storagePath}` })) });
-  } catch (error) { const status = error instanceof Error && error.message === "UNAUTHORIZED" ? 401 : 503; return NextResponse.json({ error: status === 401 ? "РўСЂРµР±СѓРµС‚СЃСЏ РІС…РѕРґ." : "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ РјРµРґРёР°С‚РµРєСѓ." }, { status }); }
+    return NextResponse.json({ data: rows.map((row) => ({ ...row, url: `/${row.storagePath}` })) });
+  } catch (error) {
+    const status = error instanceof Error && error.message === "UNAUTHORIZED" ? 401 : 503;
+    return NextResponse.json({ error: status === 401 ? "Требуется вход." : "Не удалось загрузить медиатеку." }, { status });
+  }
 }
 
 export async function POST(request: Request) {
@@ -48,19 +34,22 @@ export async function POST(request: Request) {
   let finalPath: string | undefined;
   try {
     const session = await requireGlobalAdminMutation(request);
+    const absoluteMaxBytes = bannerVideoMaxBytes();
     const declaredLength = Number(request.headers.get("content-length") ?? 0);
-    if (declaredLength > MAX_BYTES + 64 * 1024) return NextResponse.json({ error: "Р¤Р°Р№Р» РїСЂРµРІС‹С€Р°РµС‚ 10 РњР‘." }, { status: 413 });
+    if (declaredLength > absoluteMaxBytes + 64 * 1024) return NextResponse.json({ error: "UPLOAD_TOO_LARGE" }, { status: 413 });
     const form = await request.formData();
     const file = form.get("file");
     const alt = form.get("alt");
     const purpose = form.get("purpose");
     if (purpose !== null && purpose !== "banner") return NextResponse.json({ error: "INVALID_UPLOAD_PURPOSE" }, { status: 400 });
-    if (!(file instanceof File) || file.size < 1 || file.size > MAX_BYTES || (alt !== null && typeof alt !== "string")) return NextResponse.json({ error: "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ С„Р°Р№Р» РёР»Рё РѕРїРёСЃР°РЅРёРµ." }, { status: 400 });
+    if (!(file instanceof File) || file.size < 1 || file.size > absoluteMaxBytes || (alt !== null && typeof alt !== "string")) return NextResponse.json({ error: "INVALID_UPLOAD" }, { status: 400 });
     const bytes = Buffer.from(await file.arrayBuffer());
-    const signature = signatures.find(item => item.test(bytes));
+    const signature = detectUploadMedia(bytes);
     const extension = path.extname(file.name).toLowerCase();
     if (purpose === "banner" && signature?.mime === "image/avif") return NextResponse.json({ error: "BANNER_FORMAT_NOT_SUPPORTED" }, { status: 415 });
-    if (!signature || file.type !== signature.mime || ![`.${signature.ext}`, ...(signature.ext === "jpg" ? [".jpeg"] : [])].includes(extension)) return NextResponse.json({ error: "Р Р°Р·СЂРµС€РµРЅС‹ РєРѕСЂСЂРµРєС‚РЅС‹Рµ JPG, PNG, WebP Рё AVIF. SVG РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ." }, { status: 415 });
+    if (signature?.kind === "video" && purpose !== "banner") return NextResponse.json({ error: "VIDEO_BANNER_ONLY" }, { status: 415 });
+    const maxBytes = signature?.kind === "video" ? bannerVideoMaxBytes() : IMAGE_UPLOAD_MAX_BYTES;
+    if (!signature || file.size > maxBytes || file.type !== signature.mime || !acceptedExtensions(signature).includes(extension)) return NextResponse.json({ error: "UNSUPPORTED_MEDIA" }, { status: 415 });
     const id = newId();
     const now = new Date();
     const storagePath = `uploads/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${id}.${signature.ext}`;
@@ -83,6 +72,6 @@ export async function POST(request: Request) {
     if (tempPath) await rm(tempPath, { force: true }).catch(() => undefined);
     if (finalPath) await rm(finalPath, { force: true }).catch(() => undefined);
     const status = error instanceof Error && error.message === "UNAUTHORIZED" ? 401 : error instanceof Error && error.message === "CSRF_INVALID" ? 403 : 500;
-    return NextResponse.json({ error: status === 401 ? "РўСЂРµР±СѓРµС‚СЃСЏ РІС…РѕРґ." : status === 403 ? "РџСЂРѕРІРµСЂРєР° CSRF РЅРµ РїСЂРѕР№РґРµРЅР°." : "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕС…СЂР°РЅРёС‚СЊ С„Р°Р№Р»." }, { status });
+    return NextResponse.json({ error: status === 401 ? "Требуется вход." : status === 403 ? "Проверка CSRF не пройдена." : "Не удалось сохранить файл." }, { status });
   }
 }

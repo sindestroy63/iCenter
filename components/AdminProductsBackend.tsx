@@ -582,13 +582,13 @@ function DictionaryAssignmentPanel(props: {
 }) {
   const applicable=(code: string) => !props.typeKey||isAttributeApplicable((props.typeKey.split(":").pop()??"other") as ProductTypeCode,code as any);
   const productCodes=["chip","condition"];
-  const variantCodes=["memory","ram","sim","connectivity","size","material","region","bundle"];
+  const variantCodes=["memory","ram","sim","connectivity","size","material","bundle"];
   const names: Record<string,string>={ chip: "Процессор / чип",condition: "Состояние",memory: "Память",ram: "Оперативная память (RAM)",sim: "SIM",connectivity: "Подключение",size: "Размер",material: "Материал",region: "Регион / версия",bundle: "Комплектация" };
   const select=(code: string,id: string,onChange: (code: string,id: string) => void) => {
     const options=props.options.filter((entry) => entry.dictionary===code&&entry.isActive);
     return <label key={code}>{names[code]}<select value={id??""} onChange={(event) => onChange(code,event.target.value)}><option value="">Не выбрано</option>{options.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}</select>{!id&&code==="chip"&&props.product.chip&&<small>Текущее legacy-значение: {props.product.chip}</small>}{!id&&code!=="chip"&&code!=="condition"&&props.variant?.[({ memory: "storage",ram: "ram",sim: "simType",connectivity: "connectivity",size: "size",material: "material" } as Record<string,"storage"|"ram"|"simType"|"connectivity"|"size"|"material">)[code]]&&<small>Текущее legacy-значение сохранится: {props.variant[({ memory: "storage",ram: "ram",sim: "simType",connectivity: "connectivity",size: "size",material: "material" } as Record<string,"storage"|"ram"|"simType"|"connectivity"|"size"|"material">)[code]]}</small>}</label>;
   };
-  return <div className="admin-product-specs-layout"><section><h4>Модель и характеристики товара</h4><label>Модель товара<input readOnly value={props.product.name} /></label>{productCodes.filter(applicable).map((code) => select(code,props.product.dictionaryOptionIds[code]??"",props.onProduct))}</section><section><h4>Характеристики выбранного варианта</h4>{props.variant&&variantCodes.filter(applicable).map((code) => select(code,props.variant?.dictionaryOptionIds[code]??"",props.onVariant))}</section></div>;
+  return <div className="admin-product-specs-layout"><section><h4>Характеристики товара</h4><label>Название товара<input readOnly value={props.product.name} /></label>{productCodes.filter(applicable).map((code) => select(code,props.product.dictionaryOptionIds[code]??"",props.onProduct))}</section><section><h4>Характеристики выбранного варианта</h4>{props.variant&&variantCodes.filter(applicable).map((code) => select(code,props.variant?.dictionaryOptionIds[code]??"",props.onVariant))}</section></div>;
 }
 function PairEditor(props: {
   kind: "product"|"variant";

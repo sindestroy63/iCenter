@@ -50,6 +50,7 @@ function normalizeFeature(value: string) {
 export function getCatalogCharacteristics(product: CatalogProductDto, variant: CatalogVariantDto | null): string[] {
   const featureVariant = variant ?? product.variants[0] ?? null;
   if (!featureVariant) return [];
+  const isIphone = product.brand.slug === "apple" && /^iphone(?:\b|-)/i.test(product.slug);
   const characteristics: string[] = [];
   const add = (value: string | null | undefined) => {
     const formatted = value ? formatFeatureValue(value) : "";
@@ -60,7 +61,6 @@ export function getCatalogCharacteristics(product: CatalogProductDto, variant: C
   const ram = read("ram");
   if (storage && ram) add(`${formatFeatureValue(ram).replace(/\s*ГБ$/i, "")}/${formatFeatureValue(storage)}`);
   else add(storage || ram);
-  add(product.displaySize || read("displaySize", "screenSize"));
   const priority: Record<string, string[]> = {
     smartphones: ["chip", "generation", "simType", "resolution", "size"],
     tablets: ["chip", "simType", "resolution", "size", "material"],
@@ -69,7 +69,8 @@ export function getCatalogCharacteristics(product: CatalogProductDto, variant: C
     appliances: ["power", "size", "material", "resolution"],
     accessories: ["size", "material", "resolution"],
   };
-  for (const key of priority[product.category.slug] ?? ["size", "material", "resolution"]) {
+  const priorityKeys = isIphone ? ["simType"] : priority[product.category.slug] ?? ["size", "material", "resolution"];
+  for (const key of priorityKeys) {
     if (characteristics.length >= 2) break;
     add(key === "chip" ? product.chip : key === "generation" ? product.generation : read(key, key === "simType" ? "sim" : key));
   }
@@ -77,7 +78,8 @@ export function getCatalogCharacteristics(product: CatalogProductDto, variant: C
   const normalizedLabel = normalizeFeature(label);
   const generic = !label || ["вариант", "default", "defaultvariant"].includes(normalizedLabel);
   const repeats = characteristics.some((item) => normalizedLabel.includes(normalizeFeature(item))) || Boolean(featureVariant.color?.name && normalizedLabel.includes(normalizeFeature(featureVariant.color.name)));
-  if (characteristics.length < 2 && !generic && !repeats) add(label);
+  const unconfirmedDysonLabel = product.brand.slug === "dyson" && !featureVariant.color;
+  if (characteristics.length < 2 && !generic && !repeats && !unconfirmedDysonLabel && !isIphone) add(label);
   return characteristics.slice(0, 2);
 }
 
@@ -90,6 +92,14 @@ export function availabilityLabel(availability: CatalogVariantDto["availability"
 
 export function productImage(product: CatalogProductDto): string {
   return product.images.find((image) => image.src)?.src ?? "";
+}
+
+export function productVariantImage(product: CatalogProductDto, variant: CatalogVariantDto | null): string {
+  if (variant?.color?.id) {
+    const colorImage = product.images.find((image) => image.colorId === variant.color?.id && image.src);
+    if (colorImage?.src) return colorImage.src;
+  }
+  return productImage(product);
 }
 
 export function safeDescription(value: unknown): string {
@@ -112,6 +122,14 @@ export function selectCatalogDisplayVariant(product: CatalogProductDto) {
   }
   const priced = candidates.filter((variant) => variant.price !== null && Number.isFinite(Number(variant.price)));
   const variant = priced.reduce((best, candidate) => Number(candidate.price) < Number(best.price) ? candidate : best, priced[0] ?? candidates[0]);
+  const value = variant.price === null ? null : Number(variant.price);
+  return { variant, price: Number.isFinite(value) ? value : null, availability: variant.availability };
+}
+
+export function selectCatalogVariant(product: CatalogProductDto, variantId?: string) {
+  if (!variantId) return selectCatalogDisplayVariant(product);
+  const variant = product.variants.find((entry) => entry.id === variantId) ?? null;
+  if (!variant) return selectCatalogDisplayVariant(product);
   const value = variant.price === null ? null : Number(variant.price);
   return { variant, price: Number.isFinite(value) ? value : null, availability: variant.availability };
 }

@@ -143,7 +143,7 @@ try {
   }
   const cities = await prisma.$queryRaw`SELECT slug FROM cities WHERE "isActive"=TRUE ORDER BY name LIMIT 1`;
   assert.ok(cities[0], "Public filter smoke requires an active test city");
-  const filterParams = ["brand", "type", "productModel", "color", "memory", "ram", "sim", "connectivity"];
+  const filterParams = ["brand", "type", "color", "memory", "ram", "sim", "connectivity"];
   for (const filter of filterParams) {
     const response = await fetch(`${base}/api/catalog/products?city=${encodeURIComponent(cities[0].slug)}&${filter}=integration-no-match`);
     assert.equal(response.status, 200, `Public filter ${filter} must be accepted`);

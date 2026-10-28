@@ -7,6 +7,7 @@ import { StoreStateProvider, useStoreState } from "./StoreState";
 import { cities, products, type StoreProduct } from "./storeData";
 import StoreSearch from "./StoreSearch";
 import { confirmedStoreContacts } from "@/lib/store-contacts";
+import { ProductRevealProvider } from "./ProductRevealProvider";
 
 export { cities, products };
 
@@ -95,7 +96,7 @@ export function StoreFooter() {
   </footer>;
 }
 
-export function StoreShell({ children }: { children: React.ReactNode }) { return <StoreStateProvider><div className="store-app"><StoreHeader /><main>{children}</main><StoreFooter /></div></StoreStateProvider>; }
+export function StoreShell({ children }: { children: React.ReactNode }) { return <StoreStateProvider><ProductRevealProvider><div className="store-app"><StoreHeader /><main>{children}</main><StoreFooter /></div></ProductRevealProvider></StoreStateProvider>; }
 
 export function ProductCard({ product }: { product: StoreProduct }) {
   const { toggleFavorite, isFavorite } = useStoreState();

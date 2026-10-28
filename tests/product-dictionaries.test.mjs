@@ -6,6 +6,7 @@ import {
   getPublicFilterDefinitions,
   isAttributeApplicable,
   compareMemoryValues,
+  dictionaryValuesMatch,
   memoryCapacityGb,
   normalizeMemory,
   normalizeRam,
@@ -28,7 +29,7 @@ test("the registry describes all 15 dictionaries without seeding options", () =>
 });
 
 test("public filters stay fixed in the approved order", () => {
-  assert.deepEqual(PUBLIC_FILTER_ORDER, ["brand", "productType", "productModel", "color", "memory", "ram", "sim", "connectivity"]);
+  assert.deepEqual(PUBLIC_FILTER_ORDER, ["brand", "productType", "color", "memory", "ram", "sim", "connectivity"]);
   assert.deepEqual(getPublicFilterDefinitions().map(({ code }) => code), [...PUBLIC_FILTER_ORDER]);
   assert.ok(getPublicFilterDefinitions().every((entry) => entry.filterOrder !== null));
 });
@@ -41,6 +42,9 @@ test("memory normalizes unit variants to one stable key", () => {
   assert.equal(normalizeMemory("1024 ГБ")?.label, "1 ТБ");
   assert.equal(normalizeMemory("0 GB"), null);
   assert.equal(normalizeMemory("not storage"), null);
+  assert.equal(dictionaryValuesMatch("memory", "256GB", "256 ГБ"), true);
+  assert.equal(dictionaryValuesMatch("memory", "1TB", "1 ТБ"), true);
+  assert.equal(dictionaryValuesMatch("sim", "eSIM + физическая SIM", "SIM + eSIM"), true);
 });
 
 test("RAM normalizes unit variants and rejects TB", () => {

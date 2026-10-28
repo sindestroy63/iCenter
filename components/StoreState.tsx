@@ -120,12 +120,13 @@ export function StoreStateProvider({ children }: { children: React.ReactNode }) 
       try {
         const response = await fetch(`/api/catalog/products/${encodeURIComponent(item.slug)}?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" });
         if (!response.ok) throw new Error("Product refresh failed");
-        const body = await response.json() as { data?: { id: string; name: string; images?: { src: string | null; colorId: string | null }[]; variants?: { id: string; label: string; attributes?: Record<string, unknown>; color?: { id: string; name: string } | null; price: string | null; availability: StoreCartItem["availability"] }[] } };
+        const body = await response.json() as { data?: { id: string; name: string; brand?: { slug: string }; images?: { src: string | null; colorId: string | null }[]; variants?: { id: string; label: string; attributes?: Record<string, unknown>; color?: { id: string; name: string } | null; price: string | null; availability: StoreCartItem["availability"] }[] } };
         const variant = body.data?.variants?.find((entry) => entry.id === item.variantId);
         if (!body.data || !variant) throw new Error("Cart variant is unavailable");
         const image = body.data.images?.find((entry) => entry.colorId === variant.color?.id)?.src ?? body.data.images?.[0]?.src ?? item.image;
-        const details = formatCartVariantDetails(variant.color ? catalogColorDetails(variant.color) : null, variant.attributes, variant.label);
-        return { ...item, name: body.data.name, image: image ?? "", details: details || variant.label, productId: body.data.id, city, priceCity: city, price: variant.price === null ? null : Number(variant.price), availability: variant.availability };
+        const fallbackLabel = body.data.brand?.slug === "dyson" && !variant.color ? null : variant.label;
+        const details = formatCartVariantDetails(variant.color ? catalogColorDetails(variant.color) : null, variant.attributes, fallbackLabel);
+        return { ...item, name: body.data.name, image: image ?? "", details, productId: body.data.id, city, priceCity: city, price: variant.price === null ? null : Number(variant.price), availability: variant.availability };
       } catch {
         return { ...item, productId: undefined, city, priceCity: city, price: null, availability: "UNSPECIFIED" as const };
       }

@@ -24,9 +24,10 @@ import {
   type CatalogProductDto,
 } from "@/components/catalogClient";
 import CatalogProductCard from "@/components/CatalogProductCard";
+import BannerVideo from "@/components/BannerVideo";
 
 type ProductDetails = CatalogProductDto & { relatedProductIds?: string[] };
-type TradeInBanner = { imageUrl: string | null; isActive: boolean };
+type TradeInBanner = { mediaUrl: string | null; mediaType: string | null; isActive: boolean };
 type LeadForm = {
   name: string;
   phone: string;
@@ -266,7 +267,7 @@ export default function ProductDetailsLower({
 
       {banner?.isActive !== false && (
         <section
-          className={`product-trade-banner${banner?.imageUrl && !bannerFailed ? " has-image" : ""}`}
+          className={`product-trade-banner${banner?.mediaUrl && !bannerFailed ? " has-image" : ""}`}
           aria-labelledby="product-trade-title"
         >
           <div className="product-trade-copy">
@@ -285,15 +286,9 @@ export default function ProductDetailsLower({
               Узнать стоимость <ArrowRight size={17} />
             </button>
           </div>
-          {banner?.imageUrl && !bannerFailed && (
-            <img
-              className="product-trade-image"
-              src={banner.imageUrl}
-              alt=""
-              aria-hidden="true"
-              onError={() => setBannerFailed(true)}
-            />
-          )}
+          {banner?.mediaUrl && !bannerFailed && (banner.mediaType?.startsWith("video/")
+            ? <BannerVideo src={banner.mediaUrl} className="product-trade-image" onError={() => setBannerFailed(true)} />
+            : <img className="product-trade-image" src={banner.mediaUrl} alt="" aria-hidden="true" onError={() => setBannerFailed(true)} />)}
         </section>
       )}
 

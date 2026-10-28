@@ -79,9 +79,11 @@ export async function GET(request: Request, { params }: { params: { slug: string
       }
       const variants = new Map<string, object>();
       const images = new Map<string, object>();
+      const hiddenPublicAttributes = new Set(["region", "model", "productModel", "productLine", "displaySize", "screenSize", "diagonal", "диагональ"]);
       for (const row of rows) {
         if (!variants.has(row.variantId)) {
           const attributes = { ...(parseJson(row.attributes) as Record<string, unknown> | null ?? {}) };
+          for (const key of Object.keys(attributes)) if (hiddenPublicAttributes.has(key)) delete attributes[key];
           for (const [key, value] of Object.entries({ storage: row.storage, ram: row.ram, simType: row.simType, connectivity: row.connectivity, size: row.size, material: row.material })) if (value) attributes[key] = value;
           variants.set(row.variantId, { id: row.variantId, sku: row.sku, label: row.label, attributes, color: row.colorId ? { id: row.colorId, name: row.colorName, nameRu: row.colorNameRu, slug: row.colorSlug, hex: row.hexPrimary, secondaryHex: row.hexSecondary } : null, price: row.price, oldPrice: row.oldPrice, availability: publicAvailability(row.availability, row.allowPreorder), deliveryTime: row.deliveryTime });
         }
@@ -91,7 +93,7 @@ export async function GET(request: Request, { params }: { params: { slug: string
         const variant = variants.get(variantId) as { attributes: Record<string, unknown> } | undefined;
         if (!variant) continue;
         for (const entry of entries) {
-          if (entry.code === "color") continue;
+          if (entry.code === "color" || entry.code === "region") continue;
           const publicKey = ({ memory: "storage", sim: "simType" } as Record<string, string>)[entry.code] ?? entry.code;
           variant.attributes[publicKey] = entry.label;
         }

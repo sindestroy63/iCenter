@@ -99,18 +99,24 @@ export const DICTIONARY_REGISTRY: readonly DictionaryDefinition[] = [
   { code: "productLine", label: "Линейка товара", source: "product_lines", scope: "ENTITY", filterOrder: null, applicableTypes: "ALL" },
 ] as const;
 
-export const PUBLIC_FILTER_ORDER = ["brand", "productType", "productModel", "color", "memory", "ram", "sim", "connectivity"] as const satisfies readonly DictionaryCode[];
+const HIDDEN_LEGACY_DICTIONARIES = new Set<DictionaryCode>(["productModel", "productLine", "region"]);
+
+export const ADMIN_DICTIONARY_REGISTRY = DICTIONARY_REGISTRY.filter(
+  (definition) => !HIDDEN_LEGACY_DICTIONARIES.has(definition.code),
+);
+
+export const PUBLIC_FILTER_ORDER = ["brand", "productType", "color", "memory", "ram", "sim", "connectivity"] as const satisfies readonly DictionaryCode[];
 
 export const PRODUCT_TYPE_ATTRIBUTE_RULES: readonly ProductTypeAttributeRule[] = [
-  { type: "smartphone", attributes: ["brand", "productType", "productModel", "color", "memory", "ram", "sim", "connectivity", "chip", "region", "condition", "bundle"] },
-  { type: "tablet", attributes: ["brand", "productType", "productModel", "color", "memory", "ram", "sim", "connectivity", "chip", "region", "condition", "bundle"] },
-  { type: "laptop", attributes: ["brand", "productType", "productModel", "color", "memory", "ram", "connectivity", "chip", "region", "condition", "bundle"] },
-  { type: "watch", attributes: ["brand", "productType", "productModel", "color", "sim", "connectivity", "size", "material", "region", "condition", "bundle"] },
-  { type: "headphones", attributes: ["brand", "productType", "productModel", "color", "connectivity", "material", "region", "condition", "bundle"] },
-  { type: "vacuum", attributes: ["brand", "productType", "productModel", "color", "connectivity", "material", "region", "condition", "bundle"] },
-  { type: "hairCare", attributes: ["brand", "productType", "productModel", "color", "connectivity", "material", "region", "condition", "bundle"] },
-  { type: "console", attributes: ["brand", "productType", "productModel", "color", "memory", "connectivity", "chip", "region", "condition", "bundle"] },
-  { type: "other", attributes: ["brand", "productType", "productModel", "color", "region", "condition"] },
+  { type: "smartphone", attributes: ["brand", "productType", "color", "memory", "ram", "sim", "connectivity", "chip", "condition", "bundle"] },
+  { type: "tablet", attributes: ["brand", "productType", "color", "memory", "ram", "sim", "connectivity", "chip", "condition", "bundle"] },
+  { type: "laptop", attributes: ["brand", "productType", "color", "memory", "ram", "connectivity", "chip", "condition", "bundle"] },
+  { type: "watch", attributes: ["brand", "productType", "color", "sim", "connectivity", "size", "material", "condition", "bundle"] },
+  { type: "headphones", attributes: ["brand", "productType", "color", "connectivity", "material", "condition", "bundle"] },
+  { type: "vacuum", attributes: ["brand", "productType", "color", "connectivity", "material", "condition", "bundle"] },
+  { type: "hairCare", attributes: ["brand", "productType", "color", "connectivity", "material", "condition", "bundle"] },
+  { type: "console", attributes: ["brand", "productType", "color", "memory", "connectivity", "chip", "condition", "bundle"] },
+  { type: "other", attributes: ["brand", "productType", "color", "condition"] },
 ] as const;
 
 const registryByCode = new Map(DICTIONARY_REGISTRY.map((entry) => [entry.code, entry]));
@@ -169,6 +175,15 @@ export function normalizeSim(value: string): CanonicalizedDictionaryValue | null
   const option = options[normalized];
   if (!option) return null;
   return { dictionary: "sim", ...option, aliases: value.trim() === option.label ? [] : [value.trim()], sortOrder: Object.keys(options).indexOf(normalized) };
+}
+
+export function canonicalDictionaryValueKey(dictionary: "memory" | "ram" | "sim", value: string): string {
+  const normalized = dictionary === "memory" ? normalizeMemory(value) : dictionary === "ram" ? normalizeRam(value) : normalizeSim(value);
+  return normalized?.canonicalKey ?? `${dictionary}:raw:${normalizeText(value)}`;
+}
+
+export function dictionaryValuesMatch(dictionary: "memory" | "ram" | "sim", left: string, right: string): boolean {
+  return canonicalDictionaryValueKey(dictionary, left) === canonicalDictionaryValueKey(dictionary, right);
 }
 
 function normalizeCapacity(value: string, dictionary: "memory" | "ram"): CanonicalizedDictionaryValue | null {

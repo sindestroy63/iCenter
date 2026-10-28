@@ -3,14 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, ShoppingCart, Package, FolderTree, Tags, Circle, MapPin, Image, Star, Users, Settings, Files, Search, Menu, ExternalLink, ChevronDown, X, LogOut, UserRound } from "lucide-react";
+import { LayoutDashboard, ShoppingCart, Package, FolderTree, Tags, Circle, MapPin, Image, Star, Flame, Users, Settings, Files, Search, Menu, ExternalLink, ChevronDown, X, LogOut, UserRound } from "lucide-react";
 
 type Role = "OWNER" | "ADMIN" | "DEVELOPER" | "CITY_MANAGER";
 type City = { id?: string; slug: string; name: string };
 export type SessionUser = { id: string; email: string; name: string | null; firstName: string | null; lastName: string | null; avatarMediaId: string | null; avatarUrl: string | null; role: Role; cities: City[] };
 export const AdminUserContext = React.createContext<{ user: SessionUser | null; setUser: React.Dispatch<React.SetStateAction<SessionUser | null>> } | null>(null);
 
-const nav = [["Главная", LayoutDashboard, "/admin"], ["Заявки", ShoppingCart, "/admin/requests"], ["Товары", Package, "/admin/products"], ["Категории", FolderTree, "/admin/categories"], ["Бренды", Tags, "/admin/brands"], ["Справочник", Circle, "/admin/dictionaries"], ["Типы товаров", Package, "/admin/product-types"], ["Города", MapPin, "/admin/cities"], ["Баннеры", Image, "/admin/banners"], ["Лучшие предложения", Star, "/admin/best-offers"], ["Сотрудники", Users, "/admin/employees"], ["Настройки сайта", Settings, "/admin/settings"], ["Медиа", Files, "/admin/media"]] as const;
+const nav = [["Главная", LayoutDashboard, "/admin"], ["Заявки", ShoppingCart, "/admin/requests"], ["Товары", Package, "/admin/products"], ["Категории", FolderTree, "/admin/categories"], ["Бренды", Tags, "/admin/brands"], ["Справочник", Circle, "/admin/dictionaries"], ["Типы товаров", Package, "/admin/product-types"], ["Города", MapPin, "/admin/cities"], ["Баннеры", Image, "/admin/banners"], ["Лучшие предложения", Star, "/admin/best-offers"], ["Популярные товары", Flame, "/admin/popular-products"], ["Сотрудники", Users, "/admin/employees"], ["Настройки сайта", Settings, "/admin/settings"], ["Медиа", Files, "/admin/media"]] as const;
 
 function csrfToken() {
   const raw = document.cookie.split("; ").find((part) => part.startsWith("icenter_csrf="))?.slice("icenter_csrf=".length) ?? "";

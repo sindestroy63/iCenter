@@ -5,16 +5,21 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowUpDown, Check, ChevronDown, Grid2X2, List, PackageOpen, Search, SlidersHorizontal, X } from "lucide-react";
 import { useStoreState } from "./StoreState";
-import { selectCatalogDisplayVariant, variantAttribute, type CatalogProductDto } from "./catalogClient";
-import { compareMemoryValues } from "@/lib/product-dictionaries";
+import { productVariantImage, variantAttribute, type CatalogProductDto, type CatalogVariantDto } from "./catalogClient";
+import { compareMemoryValues, dictionaryValuesMatch } from "@/lib/product-dictionaries";
 import { catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
+import { expandCatalogSearchQuery, normalizeCatalogSearchQuery } from "@/lib/catalog-search";
 import CatalogProductCard from "./CatalogProductCard";
 import ColorName from "./ColorName";
 
-async function loadCatalogUniverse(city: string, signal: AbortSignal): Promise<CatalogProductDto[]> {
+async function loadCatalogProducts(city: string, signal: AbortSignal, filters?: URLSearchParams): Promise<CatalogProductDto[]> {
   const all: CatalogProductDto[] = [];
   for (let offset = 0; offset <= 10000; offset += 100) {
-    const response = await fetch(`/api/catalog/products?city=${encodeURIComponent(city)}&limit=100&offset=${offset}`, { signal, cache: "no-store" });
+    const params = new URLSearchParams(filters);
+    params.set("city", city);
+    params.set("limit", "100");
+    params.set("offset", String(offset));
+    const response = await fetch(`/api/catalog/products?${params}`, { signal, cache: "no-store" });
     if (!response.ok) throw new Error("Catalog metadata request failed");
     const body = await response.json() as { data: CatalogProductDto[] };
     const page = Array.isArray(body.data) ? body.data : [];
@@ -24,9 +29,20 @@ async function loadCatalogUniverse(city: string, signal: AbortSignal): Promise<C
   return all;
 }
 
-function ProductTile({ product }: { product: CatalogProductDto }) {
+type CatalogEntry = { product: CatalogProductDto; variant: CatalogVariantDto };
+
+function catalogEntries(products: CatalogProductDto[]): CatalogEntry[] {
+  const seen = new Set<string>();
+  return products.flatMap((product) => product.variants.flatMap((variant) => {
+    if (seen.has(variant.id)) return [];
+    seen.add(variant.id);
+    return [{ product, variant }];
+  }));
+}
+
+function ProductTile({ entry }: { entry: CatalogEntry }) {
   const { city } = useStoreState();
-  return <CatalogProductCard product={product} city={city} layout="catalog" />;
+  return <CatalogProductCard product={entry.product} variantId={entry.variant.id} city={city} layout="catalog" />;
 }
 
 function FilterGroup({ title, children }: { title: string; children: React.ReactNode }) {
@@ -65,8 +81,21 @@ function CatalogSort({ value, onChange }: { value: string; onChange: (value: str
   </div>;
 }
 
-function productMinPrice(product: CatalogProductDto) {
-  return selectCatalogDisplayVariant(product).price;
+function variantPrice(variant: CatalogVariantDto) {
+  const value = variant.price === null ? null : Number(variant.price);
+  return Number.isFinite(value) ? value : null;
+}
+
+function entryMatchesSearch(entry: CatalogEntry, query: string) {
+  const normalized = normalizeCatalogSearchQuery(query);
+  if (!normalized) return true;
+  const { product, variant } = entry;
+  const haystack = normalizeCatalogSearchQuery([
+    product.name, product.brand.name, product.category.name, product.type.name,
+    variant.sku, variant.label, variant.color?.name, variant.color?.nameRu,
+    ...Object.values(variant.attributes ?? {}).filter((value): value is string | number => typeof value === "string" || typeof value === "number"),
+  ].filter(Boolean).join(" "));
+  return expandCatalogSearchQuery(normalized).some((candidate) => candidate.split(" ").every((token) => haystack.includes(token)));
 }
 
 function parsePrice(value: string) {
@@ -74,15 +103,6 @@ function parsePrice(value: string) {
   if (!normalized || !/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
   const price = Number(normalized);
   return Number.isFinite(price) && price >= 0 ? price : null;
-}
-
-function productCountLabel(count: number) {
-  const lastTwo = count % 100;
-  const last = count % 10;
-  if (lastTwo >= 11 && lastTwo <= 14) return "товаров";
-  if (last === 1) return "товар";
-  if (last >= 2 && last <= 4) return "товара";
-  return "товаров";
 }
 
 function globalType(product: CatalogProductDto) {
@@ -111,8 +131,8 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   const [selectedSim, setSelectedSim] = useState(sim);
   const [selectedRam, setSelectedRam] = useState(ram);
   const [selectedType, setSelectedType] = useState(typeFilter);
-  const [selectedModel, setSelectedModel] = useState("");
   const [selectedConnectivity, setSelectedConnectivity] = useState("");
+  const [selectedAvailability, setSelectedAvailability] = useState("");
   const [products, setProducts] = useState<CatalogProductDto[]>([]);
   const [catalogUniverse, setCatalogUniverse] = useState<CatalogProductDto[]>([]);
   const [categoryOptions, setCategoryOptions] = useState<[string, string][]>([]);
@@ -163,8 +183,8 @@ export default function CatalogView({ query = "", title = "Каталог", bran
     if (["name", "category", "new", "priceAsc", "priceDesc"].includes(initialSort ?? "")) setSort(initialSort!);
     setMinPrice(params.get("minPrice") ?? "");
     setMaxPrice(params.get("maxPrice") ?? "");
-    setSelectedModel(params.get("productModel") ?? "");
     setSelectedConnectivity(params.get("connectivity") ?? "");
+    setSelectedAvailability(params.get("availability") ?? "");
     setUrlReady(true);
   }, []);
   useEffect(() => {
@@ -188,32 +208,30 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    loadCatalogUniverse(city, controller.signal)
+    loadCatalogProducts(city, controller.signal)
       .then(setCatalogUniverse)
       .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) setCatalogUniverse([]); });
     return () => controller.abort();
   }, [city]);
   useEffect(() => {
     const controller = new AbortController();
-    const params = new URLSearchParams({ city, limit: "100" });
+    const params = new URLSearchParams();
     if (search.trim()) params.set("q", search.trim());
     if (selectedCategory) params.set("category", selectedCategory);
     if (selectedBrand) params.set("brand", brandOptions.find(([slug, name]) => slug === selectedBrand || name === selectedBrand)?.[0] ?? selectedBrand);
     if (selectedType) params.set("type", selectedType);
-    if (selectedModel) params.set("productModel", selectedModel);
     if (selectedConnectivity) params.set("connectivity", selectedConnectivity);
     if (selectedMemory) params.set("memory", selectedMemory);
     if (selectedColor) params.set("color", selectedColor);
     if (selectedRam) params.set("ram", selectedRam);
     if (selectedSim) params.set("sim", selectedSim);
     setLoading(true); setError(false);
-    fetch(`/api/catalog/products?${params}`, { signal: controller.signal, cache: "no-store" })
-      .then(async (response) => { if (!response.ok) throw new Error("Catalog request failed"); return response.json() as Promise<{ data: CatalogProductDto[] }>; })
-      .then((body) => { if (!Array.isArray(body.data)) throw new Error("Invalid catalog response"); setProducts(body.data); })
+    loadCatalogProducts(city, controller.signal, params)
+      .then(setProducts)
       .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) { setProducts([]); setError(true); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [city, search, selectedCategory, selectedBrand, selectedType, selectedModel, selectedConnectivity, selectedMemory, selectedColor, selectedSim, selectedRam, brandOptions, retry]);
+  }, [city, search, selectedCategory, selectedBrand, selectedType, selectedConnectivity, selectedMemory, selectedColor, selectedSim, selectedRam, brandOptions, retry]);
 
   useEffect(() => {
     if (!urlReady) return;
@@ -226,8 +244,8 @@ export default function CatalogView({ query = "", title = "Каталог", bran
     if (selectedColor) params.set("color", selectedColor);
     if (selectedSim) params.set("sim", selectedSim);
     if (selectedRam) params.set("ram", selectedRam);
-    if (selectedModel) params.set("productModel", selectedModel);
     if (selectedConnectivity) params.set("connectivity", selectedConnectivity);
+    if (selectedAvailability) params.set("availability", selectedAvailability);
     const min = parsePrice(minPrice);
     const max = parsePrice(maxPrice);
     if (min !== null) params.set("minPrice", String(min));
@@ -236,7 +254,7 @@ export default function CatalogView({ query = "", title = "Каталог", bran
     const basePath = pathname === "/search" ? "/search" : "/catalog";
     const nextUrl = `${basePath}${params.size ? `?${params}` : ""}`;
     if (`${window.location.pathname}${window.location.search}` !== nextUrl) window.history.replaceState(null, "", nextUrl);
-  }, [urlReady, pathname, search, selectedCategory, selectedBrand, selectedType, selectedMemory, selectedColor, selectedSim, selectedRam, selectedModel, selectedConnectivity, minPrice, maxPrice, sort]);
+  }, [urlReady, pathname, search, selectedCategory, selectedBrand, selectedType, selectedMemory, selectedColor, selectedSim, selectedRam, selectedConnectivity, selectedAvailability, minPrice, maxPrice, sort]);
 
   const optionProducts = catalogUniverse.length ? catalogUniverse : products;
   const categories = useMemo(() => categoryOptions.length ? categoryOptions : Array.from(new Map(optionProducts.map((p) => [p.category.slug, p.category.name])).entries()), [optionProducts, categoryOptions]);
@@ -247,46 +265,53 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   const rams = useMemo(() => Array.from(new Set(optionProducts.flatMap((p) => p.variants.map((v) => variantAttribute(v, "ram")).filter(Boolean)))).sort(compareMemoryValues), [optionProducts]);
   const types = useMemo(() => Array.from(new Map(optionProducts.map(globalType).filter((item): item is NonNullable<ReturnType<typeof globalType>> => Boolean(item)).map((item) => [item.slug, item.name])).entries()), [optionProducts]);
   const additionalFilters: Array<[string, string[]]> = [];
-  const models = useMemo(() => Array.from(new Set(optionProducts.map((p) => p.model ?? "").filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru")), [optionProducts]);
   const connectivityOptions = useMemo(() => Array.from(new Set(optionProducts.flatMap((p) => p.variants.map((v) => variantAttribute(v, "connectivity")).filter(Boolean)))).sort((a, b) => a.localeCompare(b, "ru")), [optionProducts]);
+  const productEntries = useMemo(() => catalogEntries(products), [products]);
+  const universeEntries = useMemo(() => catalogEntries(optionProducts), [optionProducts]);
   const minPriceValue = parsePrice(minPrice);
   const maxPriceValue = parsePrice(maxPrice);
   const invalidPriceRange = minPriceValue !== null && maxPriceValue !== null && minPriceValue > maxPriceValue;
-  const filtered = useMemo(() => products.filter((p) => {
-    if (selectedType && globalType(p)?.slug !== selectedType) return false;
-    if (selectedModel && p.model !== selectedModel && p.slug !== selectedModel) return false;
-    const price = productMinPrice(p);
+  const filtered = useMemo(() => productEntries.filter(({ product, variant }) => {
+    if (!entryMatchesSearch({ product, variant }, search)) return false;
+    if (selectedType && globalType(product)?.slug !== selectedType) return false;
+    if (selectedMemory && !dictionaryValuesMatch("memory", variantAttribute(variant, "storage"), selectedMemory)) return false;
+    if (selectedColor && variant.color?.name !== selectedColor && variant.color?.id !== selectedColor && variant.color?.slug !== selectedColor) return false;
+    if (selectedRam && !dictionaryValuesMatch("ram", variantAttribute(variant, "ram"), selectedRam)) return false;
+    if (selectedSim && !dictionaryValuesMatch("sim", variantAttribute(variant, "simType"), selectedSim)) return false;
+    if (selectedConnectivity && variantAttribute(variant, "connectivity") !== selectedConnectivity) return false;
+    if (selectedAvailability && variant.availability !== selectedAvailability) return false;
+    const price = variantPrice(variant);
     if (invalidPriceRange || minPriceValue !== null && (price === null || price < minPriceValue) || maxPriceValue !== null && (price === null || price > maxPriceValue)) return false;
-    return p.variants.some((v) => (!selectedMemory || variantAttribute(v, "storage") === selectedMemory) && (!selectedColor || v.color?.name === selectedColor || v.color?.id === selectedColor) && (!selectedRam || variantAttribute(v, "ram") === selectedRam) && (!selectedSim || variantAttribute(v, "simType") === selectedSim) && (!selectedConnectivity || variantAttribute(v, "connectivity") === selectedConnectivity));
+    return true;
   }).sort((a, b) => {
-    if (sort === "name") return search.trim() ? 0 : a.name.localeCompare(b.name, "ru");
-    if (sort === "category") return a.category.name.localeCompare(b.category.name, "ru");
+    if (sort === "name") return search.trim() ? 0 : a.product.name.localeCompare(b.product.name, "ru") || a.variant.label.localeCompare(b.variant.label, "ru");
+    if (sort === "category") return a.product.category.name.localeCompare(b.product.category.name, "ru") || a.product.name.localeCompare(b.product.name, "ru");
     if (sort === "priceAsc" || sort === "priceDesc") {
-      const left = productMinPrice(a);
-      const right = productMinPrice(b);
-      if (left === null) return right === null ? a.name.localeCompare(b.name, "ru") : 1;
+      const left = variantPrice(a.variant);
+      const right = variantPrice(b.variant);
+      if (left === null) return right === null ? a.product.name.localeCompare(b.product.name, "ru") : 1;
       if (right === null) return -1;
-      return (sort === "priceAsc" ? left - right : right - left) || a.name.localeCompare(b.name, "ru");
+      return (sort === "priceAsc" ? left - right : right - left) || a.product.name.localeCompare(b.product.name, "ru");
     }
-    return Number(b.isNew) - Number(a.isNew);
-  }), [products, search, selectedType, selectedModel, selectedConnectivity, selectedMemory, selectedColor, selectedSim, selectedRam, minPriceValue, maxPriceValue, invalidPriceRange, sort]);
-  const suggestions = products.slice(0, 4);
-  const reset = () => { setSearch(""); setSelectedCategory(""); setSelectedBrand(""); setSelectedType(""); setSelectedModel(""); setSelectedConnectivity(""); setSelectedMemory(""); setSelectedColor(""); setSelectedSim(""); setSelectedRam(""); setMinPrice(""); setMaxPrice(""); setShowSuggestions(false); };
+    return Number(b.product.isNew) - Number(a.product.isNew) || a.product.name.localeCompare(b.product.name, "ru");
+  }), [productEntries, search, selectedType, selectedConnectivity, selectedAvailability, selectedMemory, selectedColor, selectedSim, selectedRam, minPriceValue, maxPriceValue, invalidPriceRange, sort]);
+  const suggestions = filtered.slice(0, 4);
+  const reset = () => { setSearch(""); setSelectedCategory(""); setSelectedBrand(""); setSelectedType(""); setSelectedConnectivity(""); setSelectedAvailability(""); setSelectedMemory(""); setSelectedColor(""); setSelectedSim(""); setSelectedRam(""); setMinPrice(""); setMaxPrice(""); setShowSuggestions(false); };
   const clearSearch = () => { setSearch(""); setShowSuggestions(true); };
-  const tile = (product: CatalogProductDto) => <ProductTile key={product.slug} product={product} />;
+  const tile = (entry: CatalogEntry) => <ProductTile key={entry.variant.id} entry={entry} />;
 
   return <div className="catalog-page layout-container">
 
-    <div className="catalog-heading"><div className="catalog-heading-copy"><span>Каталог iCenter</span><div><h1>{title}</h1><p>{loading ? "Загрузка каталога…" : <><strong>{filtered.length}</strong><span>{productCountLabel(filtered.length)}</span></>}</p></div></div><button className="mobile-filter-btn" onClick={() => setMobileFilters((v) => !v)}><SlidersHorizontal size={17} />Фильтры</button></div>
-    <div className="catalog-search-row" ref={searchRef} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShowSuggestions(false); }}><label className="catalog-search"><Search size={19} /><input value={search} aria-expanded={showSuggestions} aria-controls="catalog-search-suggestions" autoComplete="off" onFocus={() => setShowSuggestions(true)} onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true); }} onKeyDown={(e) => { if (e.key === "Escape" || e.key === "Enter") setShowSuggestions(false); }} placeholder="Поиск товаров" />{search && <button type="button" aria-label="Очистить поиск" onClick={clearSearch}><X size={17} /></button>}</label>{showSuggestions && <div className="autocomplete" id="catalog-search-suggestions" role="listbox"><div className="autocomplete-products"><strong>{search.trim() ? "Результаты поиска" : "Товары каталога"}</strong>{loading ? <div className="catalog-suggestion-state">Поиск…</div> : suggestions.length ? suggestions.map((p) => { const price = selectCatalogDisplayVariant(p).price; const suggestionImage = p.images.find((i) => i.src)?.src; return <Link href={`/product/${p.slug}`} role="option" aria-selected="false" key={p.slug} onClick={() => setShowSuggestions(false)}><span className="suggestion-image">{suggestionImage ? <img src={suggestionImage} alt="" /> : <PackageOpen size={18} />}</span><span className="catalog-suggestion-copy"><b>{p.name}</b><small>{p.model ? `${p.brand.name} · ${p.model}` : `${p.category.name} · ${p.brand.name}`}</small></span><em>{price === null ? "Уточнить цену" : `от ${price.toLocaleString("ru-RU")} ₽`}</em><span className="suggestion-arrow">›</span></Link>; }) : <div className="catalog-suggestion-state"><PackageOpen size={18} /><span>Товары не найдены</span></div>}</div></div>}</div>
+    <div className="catalog-heading"><div className="store-page-heading"><h1>{title}</h1><p>Выбирайте технику и аксессуары по выгодным ценам</p></div><button className="mobile-filter-btn" onClick={() => setMobileFilters((v) => !v)}><SlidersHorizontal size={17} />Фильтры</button></div>
+    <div className="catalog-search-row" ref={searchRef} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShowSuggestions(false); }}><label className="catalog-search"><Search size={19} /><input value={search} aria-expanded={showSuggestions} aria-controls="catalog-search-suggestions" autoComplete="off" onFocus={() => setShowSuggestions(true)} onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true); }} onKeyDown={(e) => { if (e.key === "Escape" || e.key === "Enter") setShowSuggestions(false); }} placeholder="Поиск товаров" />{search && <button type="button" aria-label="Очистить поиск" onClick={clearSearch}><X size={17} /></button>}</label>{showSuggestions && <div className="autocomplete" id="catalog-search-suggestions" role="listbox"><div className="autocomplete-products"><strong>{search.trim() ? "Результаты поиска" : "Товары каталога"}</strong>{loading ? <div className="catalog-suggestion-state">Поиск…</div> : suggestions.length ? suggestions.map(({ product, variant }) => { const price = variantPrice(variant); const suggestionImage = productVariantImage(product, variant); const structuredDescription = [variant.color?.name, variantAttribute(variant, "storage"), variantAttribute(variant, "simType")].filter(Boolean).join(" · "); const variantDescription = structuredDescription || (product.brand.slug === "dyson" ? product.category.name : variant.label || product.category.name); return <Link href={`/product/${encodeURIComponent(product.slug)}?variant=${encodeURIComponent(variant.id)}`} role="option" aria-selected="false" key={variant.id} onClick={() => setShowSuggestions(false)}><span className="suggestion-image">{suggestionImage ? <img src={suggestionImage} alt="" /> : <PackageOpen size={18} />}</span><span className="catalog-suggestion-copy"><b>{product.name}</b><small>{variantDescription}</small></span><em>{price === null ? "Уточнить цену" : `${price.toLocaleString("ru-RU")} ₽`}</em><span className="suggestion-arrow">›</span></Link>; }) : <div className="catalog-suggestion-state"><PackageOpen size={18} /><span>Товары не найдены</span></div>}</div></div>}</div>
     <div className="catalog-layout">{mobileFilters && <button type="button" className="filters-backdrop" aria-label="Закрыть фильтры" onClick={() => setMobileFilters(false)} />}<aside className={`filters ${mobileFilters ? "filters-open" : ""}`}><div className="filters-title"><strong>Фильтры</strong><button onClick={() => setMobileFilters(false)} aria-label="Закрыть фильтры"><X size={18} /></button></div>
-      <FilterGroup title="Категория"><div className="filter-list"><label className={!selectedCategory ? "selected" : ""}><input type="radio" name="category" checked={!selectedCategory} onChange={() => setSelectedCategory("")} />Все результаты <span>{products.length}</span></label>{categories.map(([slug, name]) => <label className={selectedCategory === slug ? "selected" : ""} key={slug}><input type="radio" name="category" checked={selectedCategory === slug} onChange={() => setSelectedCategory(slug)} />{name}<span>{products.filter((p) => p.category.slug === slug).length}</span></label>)}</div></FilterGroup>
+      <FilterGroup title="Категория"><div className="filter-list"><label className={!selectedCategory ? "selected" : ""}><input type="radio" name="category" checked={!selectedCategory} onChange={() => setSelectedCategory("")} />Все результаты <span>{universeEntries.length}</span></label>{categories.map(([slug, name]) => <label className={selectedCategory === slug ? "selected" : ""} key={slug}><input type="radio" name="category" checked={selectedCategory === slug} onChange={() => setSelectedCategory(slug)} />{name}<span>{universeEntries.filter((entry) => entry.product.category.slug === slug).length}</span></label>)}</div></FilterGroup>
       <FilterGroup title="Бренд"><div className="check-list"><label><input type="radio" name="brand" checked={!selectedBrand} onChange={() => setSelectedBrand("")} />Все бренды</label>{brands.map(([slug, name]) => <label key={slug}><input type="radio" name="brand" checked={selectedBrand === slug || selectedBrand === name} onChange={() => setSelectedBrand(slug)} />{name}</label>)}</div></FilterGroup><FilterGroup title="Тип товара"><div className="check-list"><label><input type="radio" name="type" checked={!selectedType} onChange={() => setSelectedType("")} />Все типы</label>{types.map(([slug, name]) => <label key={slug}><input type="radio" name="type" checked={selectedType === slug} onChange={() => setSelectedType(slug)} />{name}</label>)}</div></FilterGroup>
-      {[["Объём памяти", selectedMemory, setSelectedMemory, memories], ["SIM", selectedSim, setSelectedSim, sims]].map(([titleText, selected, setter, values]) => <FilterGroup key={titleText as string} title={titleText as string}><div className="check-list"><label><input type="radio" name={titleText as string} checked={!selected} onChange={() => (setter as (v: string) => void)("")} />Любой</label>{(values as string[]).map((value) => <label key={value}><input type="radio" name={titleText as string} checked={selected === value} onChange={() => (setter as (v: string) => void)(value)} />{value}</label>)}</div></FilterGroup>)}
+      {[["Объём памяти", "memory", selectedMemory, setSelectedMemory, memories], ["SIM", "sim", selectedSim, setSelectedSim, sims]].map(([titleText, dictionary, selected, setter, values]) => <FilterGroup key={titleText as string} title={titleText as string}><div className="check-list"><label><input type="radio" name={titleText as string} checked={!selected} onChange={() => (setter as (v: string) => void)("")} />Любой</label>{(values as string[]).map((value) => <label key={value}><input type="radio" name={titleText as string} checked={Boolean(selected) && dictionaryValuesMatch(dictionary as "memory" | "sim", selected as string, value)} onChange={() => (setter as (v: string) => void)(value)} />{value}</label>)}</div></FilterGroup>)}
       <FilterGroup title="Цвет"><div className="check-list color-filter-list"><label><input type="radio" name="Цвет" checked={!selectedColor} onChange={() => setSelectedColor("")} />Любой</label>{colors.map((color) => { const hex=catalogColorHex(color); return <label key={color.id}><input type="radio" name="Цвет" checked={selectedColor === color.name || selectedColor === color.id} onChange={() => setSelectedColor(color.name)} /><i className={hex ? "catalog-color-swatch" : "catalog-color-swatch neutral-color"} style={hex ? { background: hex } : undefined} aria-hidden="true" /><ColorName color={color} compact /></label>; })}</div></FilterGroup>
       <FilterGroup title="RAM"><div className="check-list"><label><input type="radio" name="ram" checked={!selectedRam} onChange={() => setSelectedRam("")} />Любой</label>{rams.map((value) => <label key={value}><input type="radio" name="ram" checked={selectedRam === value} onChange={() => setSelectedRam(value)} />{value}</label>)}</div></FilterGroup>
-      <FilterGroup title="Модель"><div className="check-list"><label><input type="radio" name="productModel" checked={!selectedModel} onChange={() => setSelectedModel("")} />Любая</label>{models.map((value) => <label key={value}><input type="radio" name="productModel" checked={selectedModel === value} onChange={() => setSelectedModel(value)} />{value}</label>)}</div></FilterGroup>
       <FilterGroup title="Подключение"><div className="check-list"><label><input type="radio" name="connectivity" checked={!selectedConnectivity} onChange={() => setSelectedConnectivity("")} />Любое</label>{connectivityOptions.map((value) => <label key={value}><input type="radio" name="connectivity" checked={selectedConnectivity === value} onChange={() => setSelectedConnectivity(value)} />{value}</label>)}</div></FilterGroup>
+      <FilterGroup title="Наличие"><div className="check-list"><label><input type="radio" name="availability" checked={!selectedAvailability} onChange={() => setSelectedAvailability("")} />Любое</label><label><input type="radio" name="availability" checked={selectedAvailability === "IN_STOCK"} onChange={() => setSelectedAvailability("IN_STOCK")} />В наличии</label><label><input type="radio" name="availability" checked={selectedAvailability === "PREORDER"} onChange={() => setSelectedAvailability("PREORDER")} />Под заказ</label><label><input type="radio" name="availability" checked={selectedAvailability === "OUT_OF_STOCK"} onChange={() => setSelectedAvailability("OUT_OF_STOCK")} />Нет в наличии</label></div></FilterGroup>
       <FilterGroup title="Цена, ₽"><div className="catalog-price-filter"><label>От<input type="text" inputMode="decimal" value={minPrice} aria-invalid={Boolean(minPrice.trim()) && minPriceValue === null} onChange={(event) => setMinPrice(event.target.value)} placeholder="0" /></label><label>До<input type="text" inputMode="decimal" value={maxPrice} aria-invalid={Boolean(maxPrice.trim()) && maxPriceValue === null} onChange={(event) => setMaxPrice(event.target.value)} placeholder="Без лимита" /></label>{(Boolean(minPrice.trim()) && minPriceValue === null || Boolean(maxPrice.trim()) && maxPriceValue === null) && <small>Введите цену числом</small>}{invalidPriceRange && <small role="alert">Минимальная цена выше максимальной</small>}</div></FilterGroup>
       <button className="filter-reset" onClick={reset}>Сбросить фильтры</button></aside><section className="catalog-results"><div className="catalog-toolbar"><CatalogSort value={sort} onChange={setSort} /><div className="view-toggle"><button className={view === "grid" ? "active" : ""} onClick={() => setView("grid")} aria-label="Сетка" aria-pressed={view === "grid"}><Grid2X2 size={18} /></button><button className={view === "list" ? "active" : ""} onClick={() => setView("list")} aria-label="Список" aria-pressed={view === "list"}><List size={18} /></button></div></div>
       {error ? <div className="empty-state"><h2>Не удалось загрузить каталог</h2><p>Проверьте соединение и попробуйте снова.</p><button onClick={() => setRetry((value) => value + 1)}>Повторить</button></div> : loading ? <div className="loading-state">Загрузка каталога…</div> : filtered.length ? <div className={`catalog-grid ${view === "list" ? "list-view" : ""}`}>{filtered.map(tile)}</div> : <div className="empty-state"><Search size={32} /><h2>Ничего не найдено</h2><p>Для выбранного города подходящих товаров нет.</p><button onClick={reset}>Сбросить фильтры</button></div>}</section></div>

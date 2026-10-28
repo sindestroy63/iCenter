@@ -14,11 +14,13 @@ type Banner = {
   imageMediaId: string | null;
   imageName: string | null;
   imageUrl: string | null;
+  imageMimeType: string | null;
   sortOrder: number;
   isActive: boolean;
 };
 type Media = { id: string; filename: string; storagePath: string; mimeType: string; url: string };
-type Draft = Omit<Banner, "id" | "imageName" | "imageUrl"> & { id: string | null };
+type MediaKind = "image" | "video";
+type Draft = Omit<Banner, "id" | "imageName" | "imageUrl" | "imageMimeType"> & { id: string | null; mediaKind: MediaKind };
 type SlotConfig = { placement: Placement; label: string; size: string; aspect: "hero" | "brand" | "trade-in" };
 
 const slots: SlotConfig[] = [
@@ -47,14 +49,17 @@ function blank(sortOrder: number, placement: Placement): Draft {
     linkUrl: placement === "home" ? "/catalog" : null,
     linkText: placement === "home" ? "Перейти в каталог" : null,
     imageMediaId: null,
+    mediaKind: "image",
     sortOrder,
     isActive: true,
   };
 }
 
 function mediaError(code: string | undefined) {
-  if (code === "INVALID_IMAGE") return "Выберите изображение WebP, JPEG или PNG из медиатеки.";
-  if (code === "BANNER_FORMAT_NOT_SUPPORTED") return "Для баннеров поддерживаются WebP, JPEG и PNG.";
+  if (code === "INVALID_IMAGE" || code === "INVALID_MEDIA") return "Выберите поддерживаемое изображение или видео из медиатеки.";
+  if (code === "BANNER_FORMAT_NOT_SUPPORTED") return "Для баннеров поддерживаются WebP, JPEG, PNG, MP4 и WebM.";
+  if (code === "UPLOAD_TOO_LARGE") return "Видео превышает допустимый размер.";
+  if (code === "UNSUPPORTED_MEDIA") return "Файл не соответствует формату JPG, PNG, WebP, MP4 или WebM.";
   return code || "Не удалось выполнить операцию с баннером.";
 }
 
@@ -76,7 +81,7 @@ export default function AdminBannersBackend() {
       const [bannerBody, mediaBody] = await Promise.all([bannerResponse.json(), mediaResponse.json()]);
       if (!bannerResponse.ok || !mediaResponse.ok) throw new Error("Не удалось загрузить баннеры или медиатеку.");
       setItems(Array.isArray(bannerBody.data) ? bannerBody.data : []);
-      setMedia(Array.isArray(mediaBody.data) ? mediaBody.data.filter((entry: Media) => entry.mimeType.startsWith("image/")) : []);
+      setMedia(Array.isArray(mediaBody.data) ? mediaBody.data.filter((entry: Media) => entry.mimeType.startsWith("image/") || entry.mimeType.startsWith("video/")) : []);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Ошибка загрузки.");
     }
@@ -92,6 +97,7 @@ export default function AdminBannersBackend() {
     linkUrl: banner.linkUrl,
     linkText: banner.linkText,
     imageMediaId: banner.imageMediaId,
+    mediaKind: banner.imageMimeType?.startsWith("video/") ? "video" : "image",
     sortOrder: banner.sortOrder,
     isActive: banner.isActive,
   });
@@ -110,7 +116,7 @@ export default function AdminBannersBackend() {
     setBusy(true);
     setError("");
     try {
-      const { id, ...draftValue } = value;
+      const { id, mediaKind: _mediaKind, ...draftValue } = value;
       const brandTitle = brandTitles[value.placement];
       const payload = {
         ...draftValue,
@@ -138,21 +144,26 @@ export default function AdminBannersBackend() {
 
   const selectedMedia = useMemo(() => draft?.imageMediaId ? media.find((entry) => entry.id === draft.imageMediaId) : null, [draft?.imageMediaId, media]);
   const selectedSlot = draft ? slots.find((slot) => slot.placement === draft.placement) : null;
-  const selectableMedia = media.filter((entry) => ["image/jpeg", "image/png", "image/webp", ...(draft?.placement === "home" ? ["image/avif"] : [])].includes(entry.mimeType));
+  const selectableMedia = media.filter((entry) => draft?.mediaKind === "video"
+    ? ["video/mp4", "video/webm"].includes(entry.mimeType)
+    : ["image/jpeg", "image/png", "image/webp"].includes(entry.mimeType));
 
   async function uploadForBanner(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     const input = event.currentTarget;
     if (!file || !draft) return;
-    const allowedTypes = new Set(["image/webp", "image/jpeg", "image/png"]);
+    const video = draft.mediaKind === "video";
+    const allowedTypes = new Set(video ? ["video/mp4", "video/webm"] : ["image/webp", "image/jpeg", "image/png"]);
     const extension = file.name.toLowerCase().split(".").pop();
-    if (!allowedTypes.has(file.type) || !["webp", "jpg", "jpeg", "png"].includes(extension ?? "")) {
-      setError("Выберите файл WebP, JPEG или PNG.");
+    const allowedExtensions = video ? ["mp4", "webm"] : ["webp", "jpg", "jpeg", "png"];
+    if (!allowedTypes.has(file.type) || !allowedExtensions.includes(extension ?? "")) {
+      setError(video ? "Выберите видео MP4 или WebM." : "Выберите файл WebP, JPEG или PNG.");
       input.value = "";
       return;
     }
-    if (file.size < 1 || file.size > 10 * 1024 * 1024) {
-      setError("Размер изображения должен быть не больше 10 МБ.");
+    const maxBytes = video ? 80 * 1024 * 1024 : 10 * 1024 * 1024;
+    if (file.size < 1 || file.size > maxBytes) {
+      setError(video ? "Размер видео должен быть не больше 80 МБ (или лимита BANNER_VIDEO_MAX_MB на сервере)." : "Размер изображения должен быть не больше 10 МБ.");
       input.value = "";
       return;
     }
@@ -172,7 +183,7 @@ export default function AdminBannersBackend() {
       setMedia((current) => [uploaded, ...current.filter((entry) => entry.id !== uploaded.id)]);
       setDraft((current) => current ? { ...current, imageMediaId: uploaded.id } : current);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось загрузить изображение.");
+      setError(cause instanceof Error ? cause.message : "Не удалось загрузить медиафайл.");
     } finally {
       input.value = "";
       setUploading(false);
@@ -190,14 +201,14 @@ export default function AdminBannersBackend() {
         const banner = getSlotBanner(slot.placement);
         return <section className="admin-home-banner-slot" key={slot.placement}>
           <div className={`admin-home-banner-slot-preview is-${slot.aspect}`}>
-            {banner?.imageUrl ? <img src={banner.imageUrl} alt={`Превью: ${slot.label}`} /> : <Image size={22} aria-hidden="true" />}
+            {banner?.imageUrl && banner.imageMimeType?.startsWith("video/") ? <video src={banner.imageUrl} muted playsInline preload="metadata" aria-label={`Видео: ${slot.label}`} /> : banner?.imageUrl ? <img src={banner.imageUrl} alt={`Превью: ${slot.label}`} /> : <Image size={22} aria-hidden="true" />}
           </div>
           <div className="admin-home-banner-slot-details">
-            <div><h2>{slot.label}</h2><span>{slot.size} · WebP, JPEG, PNG</span></div>
+            <div><h2>{slot.label}</h2><span>{slot.size} · WebP, JPEG, PNG, MP4, WebM</span></div>
             <span className={`admin-banner-state ${banner?.isActive ? "is-active" : "is-disabled"}`}><i />{banner ? banner.isActive ? "Активен" : "Отключён" : "Не настроен"}</span>
           </div>
           <div className="admin-home-banner-slot-actions">
-            <button className="admin-secondary" type="button" onClick={() => openSlot(slot.placement)}>{banner ? "Настроить" : "Добавить изображение"}</button>
+            <button className="admin-secondary" type="button" onClick={() => openSlot(slot.placement)}>{banner ? "Настроить" : "Добавить медиа"}</button>
             {banner && <button className={`icon-action ${banner.isActive ? "admin-banner-power-active" : ""}`} type="button" aria-label={banner.isActive ? `Отключить: ${slot.label}` : `Включить: ${slot.label}`} title={banner.isActive ? "Отключить" : "Включить"} disabled={busy} onClick={() => void save({ ...edit(banner), isActive: !banner.isActive })}><Power size={16} /></button>}
           </div>
         </section>;
@@ -214,9 +225,10 @@ export default function AdminBannersBackend() {
             <label className="admin-form-label">Ссылка<input value={draft.linkUrl ?? ""} maxLength={500} onChange={(event) => setDraft({ ...draft, linkUrl: event.target.value })} /></label>
           </> : <p className="admin-banner-slot-note">Текст, оформление и ссылка задаются на сайте. Здесь настраивается только фоновое изображение.</p>}
           {draft.placement === "home" && <label className="admin-form-label">Порядок отображения<input type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label>}
-          <label className="admin-form-label">Изображение<select value={draft.imageMediaId ?? ""} onChange={(event) => setDraft({ ...draft, imageMediaId: event.target.value || null })}><option value="">Без изображения</option>{selectedMedia && !selectableMedia.includes(selectedMedia) && <option value={selectedMedia.id} disabled>Текущий формат не поддерживается, замените файл</option>}{selectableMedia.map((entry) => <option key={entry.id} value={entry.id}>{entry.filename}</option>)}</select><small>Формат WebP, JPEG или PNG. Максимальный размер файла — 10 МБ.</small></label>
-          <div className="admin-banner-upload-row"><label className="admin-secondary admin-banner-upload"><Upload size={15} />{uploading ? "Загрузка…" : "Загрузить с компьютера"}<input type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" disabled={uploading} onChange={(event) => void uploadForBanner(event)} /></label>{draft.imageMediaId && <button type="button" className="admin-secondary" onClick={() => setDraft({ ...draft, imageMediaId: null })} disabled={busy || uploading}>Удалить привязку</button>}</div>
-          {selectedMedia?.url && <div className={`admin-banner-preview-large is-${selectedSlot?.aspect ?? "brand"}`}><img src={selectedMedia.url} alt={`Предпросмотр: ${selectedSlot?.label ?? "баннер"}`} /></div>}
+          <label className="admin-form-label">Тип медиа<select value={draft.mediaKind} onChange={(event) => setDraft({ ...draft, mediaKind: event.target.value as MediaKind, imageMediaId: null })}><option value="image">Изображение</option><option value="video">Видео</option></select><small>MP4/WebM загружаются отложенно и воспроизводятся только когда баннер виден.</small></label>
+          <label className="admin-form-label">{draft.mediaKind === "video" ? "Видео" : "Изображение"}<select value={draft.imageMediaId ?? ""} onChange={(event) => setDraft({ ...draft, imageMediaId: event.target.value || null })}><option value="">Без медиафайла</option>{selectedMedia && !selectableMedia.includes(selectedMedia) && <option value={selectedMedia.id} disabled>Текущий формат не поддерживается, замените файл</option>}{selectableMedia.map((entry) => <option key={entry.id} value={entry.id}>{entry.filename}</option>)}</select><small>{draft.mediaKind === "video" ? "MP4 или WebM. До 80 МБ по умолчанию." : "WebP, JPEG или PNG. Максимум 10 МБ."}</small></label>
+          <div className="admin-banner-upload-row"><label className="admin-secondary admin-banner-upload"><Upload size={15} />{uploading ? "Загрузка…" : "Загрузить с компьютера"}<input type="file" accept={draft.mediaKind === "video" ? ".mp4,.webm,video/mp4,video/webm" : ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"} disabled={uploading} onChange={(event) => void uploadForBanner(event)} /></label>{draft.imageMediaId && <button type="button" className="admin-secondary" onClick={() => setDraft({ ...draft, imageMediaId: null })} disabled={busy || uploading}>Удалить привязку</button>}</div>
+          {selectedMedia?.url && <div className={`admin-banner-preview-large is-${selectedSlot?.aspect ?? "brand"}`}>{selectedMedia.mimeType.startsWith("video/") ? <video src={selectedMedia.url} controls muted playsInline preload="metadata">Ваш браузер не поддерживает видео.</video> : <img src={selectedMedia.url} alt={`Предпросмотр: ${selectedSlot?.label ?? "баннер"}`} />}</div>}
           <label className="admin-check"><input type="checkbox" checked={draft.isActive} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} />Показывать баннер</label>
         </div>
         <footer><button type="button" className="admin-secondary" disabled={busy || uploading} onClick={() => setDraft(null)}>Отмена</button><button type="button" className="admin-primary" disabled={busy || uploading || (draft.placement === "home" && !draft.title.trim())} onClick={() => void save(draft)}>{busy ? "Сохранение…" : draft.id ? "Сохранить изменения" : "Сохранить"}</button></footer>

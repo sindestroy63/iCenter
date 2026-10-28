@@ -9,6 +9,7 @@ import { productImage, variantAttribute, type CatalogProductDto, type CatalogVar
 import { compareMemoryValues } from "@/lib/product-dictionaries";
 import { catalogColorDetails, catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
 import ColorName from "./ColorName";
+import { useProductReveal } from "./ProductRevealProvider";
 
 function canonicalAttributeKey(key: string) { return key === "memory" ? "storage" : key === "sim" ? "simType" : key; }
 function productVariantAttribute(variant: CatalogVariantDto, key: string) {
@@ -22,8 +23,9 @@ function formatPrice(value: string | null) { return value === null ? "Уточн
 function availabilityText(value: CatalogVariantDto["availability"]) { return value === "IN_STOCK" ? "В наличии" : value === "PREORDER" ? "Под заказ 1–2 дня" : value === "OUT_OF_STOCK" ? "Нет в наличии" : "Уточняйте наличие"; }
 const categoryIcons = { smartphones: Smartphone, tablets: Tablet, laptops: Laptop, appliances: House, consoles: Gamepad2 };
 
-export default function ProductView({ slug }: { slug: string }) {
+export default function ProductView({ slug, initialVariantId = "" }: { slug: string; initialVariantId?: string }) {
   const { city, addToCart, toggleFavorite, isFavorite } = useStoreState();
+  const { isTarget } = useProductReveal();
   const [product, setProduct] = useState<CatalogProductDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -36,11 +38,14 @@ export default function ProductView({ slug }: { slug: string }) {
     const controller = new AbortController(); setLoading(true); setError(false); setProduct(null); setSelection(""); setImage(0); setFailedImages(new Set());
     fetch(`/api/catalog/products/${encodeURIComponent(slug)}?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" })
       .then(async (r) => { if (!r.ok) throw new Error("Product not found"); return r.json() as Promise<{ data: CatalogProductDto }>; })
-      .then((body) => { if (!body.data?.variants) throw new Error("Invalid product response"); setProduct(body.data); setSelection(body.data.variants[0]?.id ?? ""); })
+      .then((body) => { if (!body.data?.variants) throw new Error("Invalid product response"); setProduct(body.data); setSelection(body.data.variants.some((variant) => variant.id === initialVariantId) ? initialVariantId : body.data.variants[0]?.id ?? ""); })
       .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(true); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [slug, city]);
+  }, [slug, city, initialVariantId]);
+  useEffect(() => {
+    if (!loading && isTarget(slug, initialVariantId)) window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [initialVariantId, isTarget, loading, slug]);
   const variants = product?.variants ?? [];
   const selectedVariant = variants.find((v) => v.id === selection) ?? variants[0];
   useEffect(() => { setImage(0); }, [selectedVariant?.color?.id]);
@@ -93,12 +98,12 @@ export default function ProductView({ slug }: { slug: string }) {
   };
   const valueAvailable = (key: string, value: string) => variants.some((candidate) => productVariantAttribute(candidate, key) === value);
   const colorAvailable = (colorId: string) => variants.some((candidate) => candidate.color?.id === colorId);
-  const add = () => { if (!product || !selectedVariant) return; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, selectedVariant.label), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
+  const add = () => { if (!product || !selectedVariant) return; const fallbackLabel = product.brand.slug === "dyson" && !selectedVariant.color ? null : selectedVariant.label; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, fallbackLabel), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
 
   if (loading) return <div className="layout-container loading-state">Загрузка товара…</div>;
   if (error || !product) return <div className="layout-container empty-state product-not-found"><h1>{error ? "Не удалось загрузить товар" : "Товар не найден"}</h1><p>{error ? "Проверьте соединение и повторите попытку." : "Опубликованный товар недоступен для выбранного города."}</p><Link href="/catalog">Вернуться в каталог</Link></div>;
   const CategoryIcon = categoryIcons[product.category.slug as keyof typeof categoryIcons] ?? Grid2X2;
-  return <div className="product-page layout-container">
+  return <div className={`product-page layout-container${isTarget(slug, initialVariantId) ? " is-cinematic-arrival" : ""}`}>
     <div className="product-layout">
       <section className="product-gallery" aria-label="Фотографии товара">
         <div className="product-main-image">

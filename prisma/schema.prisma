@@ -149,7 +149,8 @@ model Product {
   subcategory   Category?        @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: Restrict)
   images        ProductImage[]
   variants      ProductVariant[]
-  bestOffer     BestOffer?
+  bestOffers    BestOffer[]
+  popularProducts PopularProduct[]
   relatedProducts ProductRelatedProduct[] @relation("RelatedProductSource")
   relatedFrom     ProductRelatedProduct[] @relation("RelatedProductTarget")
   tradeInLeads    TradeInLead[]
@@ -172,6 +173,8 @@ model ProductVariant {
   attributes     ProductVariantAttribute[]
   inventory      Inventory[]
   requestItems   RequestItem[]
+  bestOffers     BestOffer[]
+  popularProducts PopularProduct[]
   isActive       Boolean                   @default(true) @map("is_active")
   createdAt      DateTime                  @default(now()) @map("created_at")
   updatedAt      DateTime                  @updatedAt @map("updated_at")
@@ -268,16 +271,38 @@ model Banner {
 }
 
 model BestOffer {
-  id        String   @id @default(cuid())
-  productId String   @unique @map("product_id")
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  label     String?
-  position  Int      @unique
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id              String          @id
+  productId       String
+  variantId       String?
+  product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  title           String
+  description     String?
+  discountPercent Int?
+  sortOrder       Int
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
+  @@index([productId])
+  @@index([isActive, sortOrder])
   @@map("best_offers")
+}
+
+model PopularProduct {
+  id        String          @id
+  productId String
+  variantId String?
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  sortOrder Int
+  isActive  Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([productId])
+  @@index([isActive, sortOrder])
+  @@map("popular_products")
 }
 
 model Media {

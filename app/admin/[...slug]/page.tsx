@@ -6,6 +6,7 @@ import AdminTaxonomyBackend from "@/components/AdminTaxonomyBackend";
 import AdminCitiesBackend from "@/components/AdminCitiesBackend";
 import AdminBannersBackend from "@/components/AdminBannersBackend";
 import AdminBestOffersBackend from "@/components/AdminBestOffersBackend";
+import AdminPopularProductsBackend from "@/components/AdminPopularProductsBackend";
 import AdminSettingsBackend from "@/components/AdminSettingsBackend";
 import AdminDictionaries from "@/components/AdminDictionaries";
 import AdminMediaBackend from "@/components/AdminMediaBackend";
@@ -39,6 +40,8 @@ export default async function AdminSection({ params }: { params: { slug: string[
       return <AdminBannersBackend />;
     case "best-offers":
       return <AdminBestOffersBackend />;
+    case "popular-products":
+      return <AdminPopularProductsBackend />;
     case "settings":
       return <AdminSettingsBackend />;
     case "media":

@@ -78,6 +78,11 @@ export async function findCity(tx: Db, slug: (typeof citySlugs)[number]) {
 
 export function imageUrl(storagePath: string | null, mimeType?: string | null) {
   if (!storagePath || (mimeType && !mimeType.startsWith("image/"))) return null;
+  return publicMediaUrl(storagePath);
+}
+
+export function publicMediaUrl(storagePath: string | null) {
+  if (!storagePath) return null;
   if (/^https:\/\//i.test(storagePath)) return storagePath;
   if (storagePath.includes("..") || storagePath.includes("\\") || /^[a-zA-Z]:/.test(storagePath)) return null;
   const path = storagePath.replace(/^\/+/, "");

@@ -7,7 +7,7 @@ import { expandCatalogSearchQuery, normalizeCatalogSearchQuery } from "@/lib/cat
 
 export const dynamic = "force-dynamic";
 
-const querySchema = z.object({ q: z.string().trim().max(100).optional(), brand: z.string().trim().max(160).optional(), category: z.string().trim().max(160).optional(), type: z.string().trim().max(160).optional(), productModel: z.string().trim().max(180).optional(), color: z.string().trim().max(160).optional(), memory: z.string().trim().max(100).optional(), ram: z.string().trim().max(100).optional(), sim: z.string().trim().max(100).optional(), connectivity: z.string().trim().max(160).optional(), limit: z.coerce.number().int().min(1).max(100).default(24), offset: z.coerce.number().int().min(0).max(10000).default(0) });
+const querySchema = z.object({ q: z.string().trim().max(100).optional(), brand: z.string().trim().max(160).optional(), category: z.string().trim().max(160).optional(), type: z.string().trim().max(160).optional(), color: z.string().trim().max(160).optional(), memory: z.string().trim().max(100).optional(), ram: z.string().trim().max(100).optional(), sim: z.string().trim().max(100).optional(), connectivity: z.string().trim().max(160).optional(), limit: z.coerce.number().int().min(1).max(100).default(24), offset: z.coerce.number().int().min(0).max(10000).default(0) });
 
 export async function GET(request: Request) {
   const url = readRequestUrl(request);
@@ -24,9 +24,24 @@ export async function GET(request: Request) {
       const normalizedQuery = normalizeCatalogSearchQuery(filters.q ?? "");
       const searchPatterns = expandCatalogSearchQuery(normalizedQuery).map((term) => `%${term.replace(/[\\%_]/g, "\\$&")}%`);
       const searchCondition = searchPatterns.length ? Prisma.join(searchPatterns.map((pattern) => Prisma.sql`(
-        p0.name ILIKE ${pattern} OR COALESCE(p0.model, '') ILIKE ${pattern} OR b0.name ILIKE ${pattern}
+        p0.name ILIKE ${pattern} OR b0.name ILIKE ${pattern}
         OR pt0.name ILIKE ${pattern} OR c0.name ILIKE ${pattern}
-        OR EXISTS (SELECT 1 FROM product_variants sv0 WHERE sv0."productId" = p0.id AND (sv0.sku ILIKE ${pattern} OR sv0.label ILIKE ${pattern}))
+        OR EXISTS (
+          SELECT 1 FROM product_variants sv0
+          LEFT JOIN colors sc0 ON sc0.id = sv0."colorId"
+          WHERE sv0."productId" = p0.id AND (
+            sv0.sku ILIKE ${pattern} OR sv0.label ILIKE ${pattern}
+            OR COALESCE(sv0.storage, '') ILIKE ${pattern} OR COALESCE(sv0.ram, '') ILIKE ${pattern}
+            OR COALESCE(sv0."simType", '') ILIKE ${pattern} OR COALESCE(sv0.connectivity, '') ILIKE ${pattern}
+            OR COALESCE(sc0.name, '') ILIKE ${pattern} OR COALESCE(to_jsonb(sc0)->>'nameRu', '') ILIKE ${pattern}
+            OR EXISTS (
+              SELECT 1 FROM product_variant_attribute_values av0
+              JOIN attribute_options ao0 ON ao0.id=av0."optionId"
+              LEFT JOIN attribute_option_aliases aa0 ON aa0."optionId"=ao0.id
+              WHERE av0."variantId"=sv0.id AND (ao0.label ILIKE ${pattern} OR aa0."aliasLabel" ILIKE ${pattern})
+            )
+          )
+        )
       )`), " OR ") : Prisma.sql`TRUE`;
       const exactSearch = `%${normalizedQuery}%`;
       const rows = await tx.$queryRaw<ProductRow[]>`
@@ -45,23 +60,34 @@ export async function GET(request: Request) {
               OR (${filters.type ?? null} = 'tablet' AND lower(pt0.slug) = 'ipad')
               OR (${filters.type ?? null} = 'console' AND lower(pt0.slug) = 'playstation')
               OR (${filters.type ?? null} = 'vacuum' AND lower(pt0.slug) = 'vacuum-cleaner'))
-            AND (${filters.productModel ?? null}::text IS NULL OR p0.model = ${filters.productModel ?? null} OR p0.slug = ${filters.productModel ?? null})
             AND EXISTS (
               SELECT 1 FROM product_variants fv
               JOIN inventory fi ON fi."variantId" = fv.id AND fi."cityId" = ${city.id} AND fi."isActive" = TRUE
               LEFT JOIN colors fc ON fc.id = fv."colorId"
               WHERE fv."productId" = p0.id AND fv."isActive" = TRUE
                 AND (${filters.color ?? null}::text IS NULL OR fc.id::text = ${filters.color ?? null} OR fc.slug = ${filters.color ?? null} OR fc.name = ${filters.color ?? null})
-                AND (${filters.memory ?? null}::text IS NULL OR lower(fv.storage) = lower(${filters.memory ?? null}))
+                AND (${filters.memory ?? null}::text IS NULL OR lower(fv.storage) = lower(${filters.memory ?? null}) OR EXISTS (
+                  SELECT 1 FROM product_variant_attribute_values mav
+                  JOIN attribute_definitions mad ON mad.id=mav."definitionId" AND mad.code='memory'
+                  JOIN attribute_options mao ON mao.id=mav."optionId"
+                  LEFT JOIN attribute_option_aliases maa ON maa."optionId"=mao.id
+                  WHERE mav."variantId"=fv.id AND (lower(mao.label)=lower(${filters.memory ?? null}) OR lower(maa."aliasLabel")=lower(${filters.memory ?? null}))
+                ))
                 AND (${filters.ram ?? null}::text IS NULL OR lower(fv.ram) = lower(${filters.ram ?? null}))
-                AND (${filters.sim ?? null}::text IS NULL OR lower(fv."simType") = lower(${filters.sim ?? null}))
+                AND (${filters.sim ?? null}::text IS NULL OR lower(fv."simType") = lower(${filters.sim ?? null}) OR EXISTS (
+                  SELECT 1 FROM product_variant_attribute_values sav
+                  JOIN attribute_definitions sad ON sad.id=sav."definitionId" AND sad.code='sim'
+                  JOIN attribute_options sao ON sao.id=sav."optionId"
+                  LEFT JOIN attribute_option_aliases saa ON saa."optionId"=sao.id
+                  WHERE sav."variantId"=fv.id AND (lower(sao.label)=lower(${filters.sim ?? null}) OR lower(saa."aliasLabel")=lower(${filters.sim ?? null}))
+                ))
                 AND (${filters.connectivity ?? null}::text IS NULL OR lower(fv.connectivity) = lower(${filters.connectivity ?? null}))
             )
             AND (${searchCondition})
           ORDER BY CASE
-            WHEN ${normalizedQuery} <> '' AND (regexp_replace(lower(p0.name), '[[:space:]]+', ' ', 'g') = ${normalizedQuery} OR regexp_replace(lower(COALESCE(p0.model, '')), '[[:space:]]+', ' ', 'g') = ${normalizedQuery}) THEN 0
-            WHEN ${normalizedQuery} <> '' AND (lower(p0.name) LIKE ${`${normalizedQuery}%`} OR lower(COALESCE(p0.model, '')) LIKE ${`${normalizedQuery}%`}) THEN 1
-            WHEN ${normalizedQuery} <> '' AND (lower(p0.name) LIKE ${exactSearch} OR lower(COALESCE(p0.model, '')) LIKE ${exactSearch}) THEN 2
+            WHEN ${normalizedQuery} <> '' AND regexp_replace(lower(p0.name), '[[:space:]]+', ' ', 'g') = ${normalizedQuery} THEN 0
+            WHEN ${normalizedQuery} <> '' AND lower(p0.name) LIKE ${`${normalizedQuery}%`} THEN 1
+            WHEN ${normalizedQuery} <> '' AND lower(p0.name) LIKE ${exactSearch} THEN 2
             ELSE 3 END,
             p0."isNew" DESC, p0.name, p0.id
           LIMIT ${filters.limit} OFFSET ${filters.offset}
@@ -97,7 +123,14 @@ export async function GET(request: Request) {
         WHERE p.status = 'PUBLISHED'::"ProductStatus"
         ORDER BY p."isNew" DESC, p.name, pv.sku, gallery."sortOrder"
       `;
-      return groupProducts(rows, city);
+      const dictionaryRows = rows.length ? await tx.$queryRaw<VariantDictionaryRow[]>`
+        SELECT pav."variantId", d.code, o.label
+        FROM product_variant_attribute_values pav
+        JOIN attribute_definitions d ON d.id=pav."definitionId"
+        JOIN attribute_options o ON o.id=pav."optionId"
+        WHERE pav."variantId" IN (${Prisma.join(Array.from(new Set(rows.map((row) => row.variantId))))})
+      ` : [];
+      return groupProducts(rows, city, dictionaryRows);
     });
     if (!data) return NextResponse.json({ error: "City not found or inactive" }, { status: 404 });
     return NextResponse.json({ data });
@@ -116,7 +149,12 @@ type ProductRow = {
   imageId: string | null; imageOrder: number | null; imageColorId: string | null; imagePath: string | null; imageMimeType: string | null; imageAlt: string | null;
 };
 
-function groupProducts(rows: ProductRow[], city: City) {
+type VariantDictionaryRow = { variantId: string; code: string; label: string };
+
+function groupProducts(rows: ProductRow[], city: City, dictionaryRows: VariantDictionaryRow[]) {
+  const hiddenPublicAttributes = new Set(["region", "model", "productModel", "productLine", "displaySize", "screenSize", "diagonal", "диагональ"]);
+  const dictionaryAttributes = new Map<string, VariantDictionaryRow[]>();
+  for (const row of dictionaryRows) dictionaryAttributes.set(row.variantId, [...(dictionaryAttributes.get(row.variantId) ?? []), row]);
   const products = new Map<string, { id: string; slug: string; name: string; model: string | null; generation: string | null; chip: string | null; displaySize: string | null; releaseYear: number | null; description: unknown; specifications: unknown; isNew: boolean; brand: { id: string; name: string; slug: string }; type: { id: string; name: string; slug: string; attributes: unknown }; category: { id: string; name: string; slug: string; parentId: string | null }; city: { name: string; slug: string }; variants: Map<string, object>; images: Map<string, object> }>();
   for (const row of rows) {
     let product = products.get(row.id);
@@ -126,7 +164,13 @@ function groupProducts(rows: ProductRow[], city: City) {
     }
     if (!product.variants.has(row.variantId)) {
       const attributes = { ...(parseJson(row.variantAttributes) as Record<string, unknown> | null ?? {}) };
+      for (const key of Object.keys(attributes)) if (hiddenPublicAttributes.has(key)) delete attributes[key];
       for (const [key, value] of Object.entries({ storage: row.storage, ram: row.ram, simType: row.simType, connectivity: row.connectivity, size: row.size, material: row.material })) if (value) attributes[key] = value;
+      for (const entry of dictionaryAttributes.get(row.variantId) ?? []) {
+        if (entry.code === "region") continue;
+        const publicKey = ({ memory: "storage", sim: "simType" } as Record<string, string>)[entry.code] ?? entry.code;
+        attributes[publicKey] = entry.label;
+      }
       product.variants.set(row.variantId, { id: row.variantId, sku: row.sku, label: row.variantLabel, attributes, color: row.colorId ? { id: row.colorId, name: row.colorName, nameRu: row.colorNameRu, slug: row.colorSlug, hex: row.hexPrimary, secondaryHex: row.hexSecondary } : null, price: row.price, oldPrice: row.oldPrice, availability: publicAvailability(row.availability, row.allowPreorder), deliveryTime: row.deliveryTime });
     }
     if (row.imageId && !product.images.has(row.imageId)) product.images.set(row.imageId, { id: row.imageId, src: imageUrl(row.imagePath, row.imageMimeType), alt: row.imageAlt ?? "", colorId: row.imageColorId, order: row.imageOrder ?? 0 });

@@ -24,7 +24,7 @@ function formatSize(bytes: number) {
 }
 
 function mediaError(code: string | undefined) {
-  if (code === "MEDIA_IN_USE") return "Изображение используется на сайте. Сначала удалите ссылки на него из товаров, баннеров или других материалов.";
+  if (code === "MEDIA_IN_USE") return "Медиафайл используется на сайте. Сначала удалите ссылки на него из товаров, баннеров или других материалов.";
   if (code === "MEDIA_NOT_FOUND") return "Файл уже удалён или недоступен.";
   return code || "Не удалось выполнить операцию с файлом.";
 }
@@ -132,10 +132,12 @@ export default function AdminMediaBackend() {
           <div>
             {item.mimeType.startsWith("image/")
               ? <a href={item.url} target="_blank" rel="noopener noreferrer" aria-label={`Открыть оригинал: ${item.filename}`}><img src={item.url} alt={item.alt || item.filename} loading="lazy" /></a>
-              : <ImageOff size={28} aria-label="Предпросмотр недоступен" />}
+              : item.mimeType.startsWith("video/")
+                ? <video src={item.url} muted controls playsInline preload="metadata" aria-label={`Видео: ${item.filename}`} />
+                : <ImageOff size={28} aria-label="Предпросмотр недоступен" />}
           </div>
           <strong title={item.filename}>{item.filename}</strong>
-          <span>{formatSize(item.fileSize)} · {item.mimeType.replace("image/", "").toUpperCase()}</span>
+          <span>{formatSize(item.fileSize)} · {item.mimeType.split("/").pop()?.toUpperCase()}</span>
           {item.used && <span className="admin-media-used">Используется на сайте; удаление недоступно.</span>}
           <footer className="admin-media-actions">
             <a className="admin-secondary" href={item.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={15} />Оригинал</a>
