@@ -50,7 +50,7 @@ export async function collectionPost(request: Request, collection: ProductCollec
     const table = tableSql(collection);
     const id = newId();
     await db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${collection}:${productId}`},0))`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${collection}:${productId}`},0))::text AS locked`;
       const cityRows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM cities WHERE slug=${city} AND "isActive"=TRUE LIMIT 1`;
       if (!cityRows.length) throw new Error("INVALID_CITY");
       const cityId = cityRows[0].id;

@@ -44,6 +44,20 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     }).catch(() => undefined);
     return () => { activeRequest = false; };
   }, []);
+  React.useEffect(() => setOpen(false), [pathname]);
+  React.useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
 
   async function logout() {
     if (loggingOut) return;
@@ -61,13 +75,13 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const cities = user?.cities ?? [];
   const displayName = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.name || user?.email || "Сотрудник";
   return <AdminUserContext.Provider value={{ user, setUser }}><div className="admin-layout">
-    <button className="admin-mobile-toggle" onClick={() => setOpen(true)} aria-label="Открыть меню"><Menu size={21} /></button>
-    <aside className={`admin-side ${open ? "open" : ""}`}>
-      <div className="admin-brand"><strong>iCenter</strong><span>Панель управления</span></div>
+    <button className="admin-mobile-toggle" onClick={() => setOpen((current) => !current)} aria-label={open ? "Закрыть меню" : "Открыть меню"} aria-expanded={open} aria-controls="admin-sidebar"><Menu size={21} /></button>
+    <aside id="admin-sidebar" className={`admin-side ${open ? "open" : ""}`}>
+      <div className="admin-brand"><div><strong>iCenter</strong><span>Панель управления</span></div><button type="button" className="admin-side-close" aria-label="Закрыть меню" onClick={() => setOpen(false)}><X size={20} /></button></div>
       <nav className="admin-nav">{visibleNav.map(([label, Icon, href]) => <Link className={isNavActive(href) ? "active" : ""} href={href} key={href} onClick={() => setOpen(false)}><Icon size={19} /><span>{href === "/admin/dictionaries" ? "Справочники" : label}</span></Link>)}</nav>
       <Link className="admin-site-link" href="/"><ExternalLink size={17} />Открыть сайт</Link>
     </aside>
-    {open && <button className="admin-overlay" onClick={() => setOpen(false)} aria-label="Закрыть меню"><X size={22} /></button>}
+    {open && <button className="admin-overlay" onClick={() => setOpen(false)} aria-label="Закрыть меню" />}
     <div className="admin-main">
       <header className="admin-topbar">
         <div className="admin-top-title">{activeTitle}</div>

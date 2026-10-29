@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Search, MapPin, Heart, ShoppingCart, Menu, Truck, ShieldCheck, Headphones, ChevronDown, Check, X, Phone } from "lucide-react";
+import { Search, MapPin, Heart, ShoppingCart, Menu, LayoutGrid, Truck, ShieldCheck, Headphones, ChevronDown, Check, X, Phone, Home, Info, BadgeRussianRuble, RefreshCw, Shield } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { StoreStateProvider, useStoreState } from "./StoreState";
 import { cities, products, type StoreProduct } from "./storeData";
 import StoreSearch from "./StoreSearch";
@@ -22,7 +23,9 @@ function normalizeStorePhone(phone: string | null | undefined) {
 
 export function StoreHeader() {
   const { city, setCity, favorites, cartCount } = useStoreState();
+  const pathname = usePathname();
   const [cityMenuOpen, setCityMenuOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const cityMenuRef = useRef<HTMLDivElement>(null);
   const cityButtonRef = useRef<HTMLButtonElement>(null);
@@ -51,19 +54,50 @@ export function StoreHeader() {
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [cityMenuOpen]);
+  useEffect(() => setMobileMenuOpen(false), [pathname]);
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [mobileMenuOpen]);
   const selectCity = (slug: string) => {
     setCity(slug);
     setCityMenuOpen(false);
     cityButtonRef.current?.focus();
   };
-  return <header className={`store-header layout-container${isScrolled ? " is-scrolled" : ""}`}><div className="header-main"><Link className="logo" href="/">iCenter</Link><Link className="catalog-btn" href="/catalog"><Menu size={18} />Каталог</Link><StoreSearch /></div><div className="header-quick-actions">
+  const menuLinks = [
+    ["Главная", "/", Home],
+    ["Избранное", "/favorites", Heart],
+    ["Корзина", "/cart", ShoppingCart],
+    ["Доставка", "/delivery", Truck],
+    ["Оплата", "/payment", BadgeRussianRuble],
+    ["Рассрочка", "/installment", RefreshCw],
+    ["Гарантия", "/warranty", Shield],
+    ["О компании", "/about", Info],
+  ] as const;
+  return <><header className={`store-header layout-container${isScrolled ? " is-scrolled" : ""}`}><div className="header-main"><Link className="logo" href="/">iCenter</Link><Link className="catalog-btn" href="/catalog"><LayoutGrid size={18} />Каталог</Link><button type="button" className="store-mobile-menu-toggle" aria-label="Открыть меню" aria-expanded={mobileMenuOpen} aria-controls="store-mobile-menu" onClick={() => { setCityMenuOpen(false); setMobileMenuOpen(true); }}><Menu size={21} /></button><StoreSearch /></div><div className="header-quick-actions">
     <div className="city-menu-anchor" ref={cityMenuRef}>
       <button ref={cityButtonRef} type="button" className="header-action city-action" aria-label={`Город: ${selectedCityName}`} aria-haspopup="dialog" aria-expanded={cityMenuOpen} aria-controls="city-picker-popover" onClick={() => setCityMenuOpen((open) => !open)}><MapPin size={19} /><span className="city-action-name">{selectedCityName}</span><ChevronDown size={15} /></button>
       {cityMenuOpen && <div className="city-picker-popover" id="city-picker-popover" role="dialog" aria-label="Выберите город"><div className="city-picker-heading"><strong>Выберите город</strong><button type="button" aria-label="Закрыть выбор города" onClick={() => { setCityMenuOpen(false); cityButtonRef.current?.focus(); }}><X size={17} /></button></div><div className="city-picker-list">{cities.map((item) => <button type="button" key={item.slug} className={item.slug === city ? "selected" : ""} aria-pressed={item.slug === city} onClick={() => selectCity(item.slug)}><MapPin size={17} /><span>{item.name}</span>{item.slug === city && <Check size={17} />}</button>)}</div></div>}
     </div>
     <Link className="header-action header-favorites" href="/favorites"><Heart size={21} /><span>Избранное{favorites.length ? ` · ${favorites.length}` : ""}</span></Link>
     <Link className="header-action header-cart" href="/cart"><ShoppingCart size={21} /><span>Корзина{cartCount ? ` · ${cartCount}` : ""}</span></Link>
-  </div></header>;
+  </div></header>
+    {mobileMenuOpen && <><button type="button" className="store-mobile-menu-backdrop" aria-label="Закрыть меню" onClick={() => setMobileMenuOpen(false)} />
+    <aside id="store-mobile-menu" className="store-mobile-menu open">
+      <div className="store-mobile-menu-head"><strong>Меню</strong><button type="button" aria-label="Закрыть меню" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button></div>
+      <nav aria-label="Основное меню">{menuLinks.map(([label, href, Icon]) => <Link key={href} href={href} className={pathname === href ? "active" : ""} onClick={() => setMobileMenuOpen(false)}><Icon size={19} /><span>{label}</span>{href === "/favorites" && favorites.length > 0 && <b>{favorites.length}</b>}{href === "/cart" && cartCount > 0 && <b>{cartCount}</b>}</Link>)}</nav>
+      <Link className="store-mobile-menu-catalog" href="/catalog" onClick={() => setMobileMenuOpen(false)}><LayoutGrid size={19} />Открыть каталог</Link>
+    </aside></>}
+  </>;
 }
 
 export function StoreFooter() {
