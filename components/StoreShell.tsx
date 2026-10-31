@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Search, MapPin, Heart, ShoppingCart, Menu, Truck, ShieldCheck, Headphones, ChevronDown, Check, X, Phone, Home, Info, BadgeRussianRuble, RefreshCw, Shield } from "lucide-react";
+import { Search, MapPin, Heart, ShoppingCart, Menu, ShieldCheck, Headphones, ChevronDown, Check, X, Phone, Home, RefreshCw, Shield } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { StoreStateProvider, useStoreState } from "./StoreState";
@@ -75,14 +75,12 @@ export function StoreHeader() {
     cityButtonRef.current?.focus();
   };
   const menuLinks = [
+    ["Trade-in", "/trade-in", RefreshCw],
     ["Главная", "/", Home],
     ["Избранное", "/favorites", Heart],
     ["Корзина", "/cart", ShoppingCart],
-    ["Доставка", "/delivery", Truck],
-    ["Оплата", "/payment", BadgeRussianRuble],
     ["Рассрочка", "/installment", RefreshCw],
     ["Гарантия", "/warranty", Shield],
-    ["О компании", "/about", Info],
   ] as const;
   return <><header className={`store-header layout-container${isScrolled ? " is-scrolled" : ""}`}><div className="header-main"><Link className="logo" href="/">iCenter</Link><DesktopCatalogMegaMenu /><button type="button" className="store-mobile-menu-toggle" aria-label="Открыть меню" aria-expanded={mobileMenuOpen} aria-controls="store-mobile-menu" onClick={() => { setCityMenuOpen(false); setMobileMenuOpen(true); }}><Menu size={21} /></button><StoreSearch /></div><div className="header-quick-actions">
     <div className="city-menu-anchor" ref={cityMenuRef}>

@@ -448,10 +448,10 @@
 }
 @media(max-width:600px){
   .store-header.layout-container{grid-template-rows:none;gap:8px;padding:8px 16px}
-  .header-main{grid-template-columns:minmax(0,1fr) 44px 44px;grid-template-rows:40px 44px;gap:6px 8px}
+  .header-main{grid-template-columns:minmax(0,1fr) 44px;grid-template-rows:40px 44px;gap:6px 8px}
   .header-main>.logo{grid-column:1;grid-row:1;font-size:26px}
-  .header-main>.catalog-mega-anchor{grid-column:2;grid-row:1;width:44px}.catalog-mega-anchor>.catalog-btn{width:44px;height:40px;padding:0;font-size:0;gap:0;border-radius:9px}.catalog-mega-anchor>.catalog-btn svg:last-child{display:none}.catalog-mega-menu{display:none}
-  .store-mobile-menu-toggle{grid-column:3;grid-row:1;width:44px;height:40px;display:grid;place-items:center;padding:0;border:1px solid var(--border);border-radius:9px;background:#fff;color:var(--text)}
+  .header-main>.catalog-mega-anchor{display:none}.catalog-mega-menu{display:none}
+  .store-mobile-menu-toggle{grid-column:2;grid-row:1;width:44px;height:40px;display:grid;place-items:center;padding:0;border:1px solid var(--border);border-radius:9px;background:#fff;color:var(--text)}
   .header-main>.store-search-wrap{grid-column:1/-1;grid-row:2;width:100%}
   .header-main .store-search-wrap>.search{height:44px}
   .header-quick-actions{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
@@ -468,13 +468,14 @@
   .store-mobile-menu-head strong{font-size:20px}
   .store-mobile-menu-head button{width:40px;height:40px;display:grid;place-items:center;padding:0;border:0;border-radius:9px;background:var(--surface);color:var(--text)}
   .store-mobile-menu nav{display:grid;gap:3px;padding:12px 0}
+  .store-mobile-menu>nav a[href="/delivery"],.store-mobile-menu>nav a[href="/payment"],.store-mobile-menu>nav a[href="/about"]{display:none}
   .store-mobile-menu nav a,.store-mobile-menu-catalog{min-height:48px;display:flex;align-items:center;gap:12px;padding:0 12px;border-radius:9px;color:var(--text);text-decoration:none;font-size:14px;font-weight:600}
   .store-mobile-menu nav a.active{background:var(--surface)}
   .store-mobile-menu nav a b{min-width:24px;margin-left:auto;padding:3px 7px;border-radius:999px;background:#111820;color:#fff;text-align:center;font-size:11px}
   .mobile-catalog-menu{display:grid;gap:4px;margin-top:8px;padding-top:12px;border-top:1px solid var(--border)}.mobile-catalog-heading{display:flex;align-items:center;gap:9px;padding:8px 12px;color:#111820}.mobile-catalog-section>div{display:grid;grid-template-columns:minmax(0,1fr) 42px;align-items:center}.mobile-catalog-section>div>a{min-height:46px;display:flex;align-items:center;padding:0 12px;color:#27313d;text-decoration:none;font-size:14px;font-weight:650}.mobile-catalog-section>div>button{width:40px;height:40px;display:grid;place-items:center;border:0;border-radius:9px;background:#f3f5f8;color:#27313d}.mobile-catalog-section>div>button[aria-expanded=true] svg{transform:rotate(180deg)}.store-mobile-menu .mobile-catalog-section nav{display:grid;gap:2px;padding:2px 0 7px 16px}.store-mobile-menu .mobile-catalog-section nav a{min-height:40px;padding:0 12px;color:#64748b;font-size:13px;font-weight:550}
   .mobile-catalog-section>div>span{min-height:46px;display:flex;align-items:center;padding:0 12px;color:#7f8792;font-size:14px;font-weight:650}.store-mobile-menu .mobile-catalog-section nav span{min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;color:#9aa1ab;font-size:13px;font-weight:550}.store-mobile-menu .mobile-catalog-section nav span small{font-size:10px;font-weight:500;white-space:nowrap}
 }
-@media(max-width:350px){.store-header.layout-container{padding-inline:12px}.header-main{grid-template-columns:minmax(0,1fr) 40px 40px;gap-inline:6px}.header-main>.catalog-mega-anchor,.catalog-mega-anchor>.catalog-btn,.store-mobile-menu-toggle{width:40px}.header-quick-actions{gap:6px}.header-quick-actions .header-action{padding-inline:5px}.store-mobile-menu{width:92vw}}
+@media(max-width:350px){.store-header.layout-container{padding-inline:12px}.header-main{grid-template-columns:minmax(0,1fr) 40px;gap-inline:6px}.header-main>.catalog-mega-anchor{display:none}.store-mobile-menu-toggle{grid-column:2;width:40px}.header-quick-actions{gap:6px}.header-quick-actions .header-action{padding-inline:5px}.store-mobile-menu{width:92vw}}
 @media(max-width:1439px){.store-header.layout-container{--header-surface-inset:16px}}
 @media(max-width:1023px){.store-header.layout-container{--header-surface-inset:8px}}
 @media(max-width:767px){.store-header.layout-container{--header-surface-inset:4px}}

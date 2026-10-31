@@ -48,7 +48,12 @@ function normalizeFeature(value: string) {
   return value.toLocaleLowerCase("ru-RU").replace(/[^a-zа-яё0-9]/g, "");
 }
 
-export function getCatalogCharacteristics(product: CatalogProductDto, variant: CatalogVariantDto | null): string[] {
+function isKnownFeatureValue(value: string) {
+  const normalized = value.trim().toLocaleLowerCase("ru-RU").replace(/\s+/g, " ");
+  return normalized.length > 0 && !new Set(["unknown", "n/a", "na", "none", "null", "undefined", "не указано", "не указана", "неизвестно", "нет данных"]).has(normalized);
+}
+
+function legacyCatalogCharacteristics(product: CatalogProductDto, variant: CatalogVariantDto | null): string[] {
   const featureVariant = variant ?? product.variants[0] ?? null;
   if (!featureVariant) return [];
   const isIphone = product.brand.slug === "apple" && /^iphone(?:\b|-)/i.test(product.slug);
@@ -82,6 +87,63 @@ export function getCatalogCharacteristics(product: CatalogProductDto, variant: C
   const unconfirmedDysonLabel = product.brand.slug === "dyson" && !featureVariant.color;
   if (characteristics.length < 2 && !generic && !repeats && !unconfirmedDysonLabel && !isIphone) add(label);
   return characteristics.slice(0, 2);
+}
+
+export function getCatalogCharacteristics(product: CatalogProductDto, variant: CatalogVariantDto | null): string[] {
+  const current = variant ?? product.variants[0] ?? null;
+  if (!current) return [];
+
+  const isApple = product.brand.slug === "apple";
+  const isIphone = isApple && /^iphone(?:\b|-)/i.test(product.slug);
+  const isIpad = isApple && /^ipad(?:\b|-)/i.test(product.slug);
+  const isMacBook = isApple && /macbook/i.test(`${product.slug} ${product.name}`);
+  const isSamsung = product.brand.slug === "samsung";
+  const read = (...keys: string[]) => keys.map((key) => variantAttribute(current, key)).find((value) => isKnownFeatureValue(value)) ?? "";
+  const storage = read("storage", "memory");
+  const ram = read("ram");
+  const sim = read("simType", "sim");
+  const connectivity = read("connectivity");
+  const result: string[] = [];
+  const add = (value: string) => {
+    if (!isKnownFeatureValue(value)) return;
+    const formatted = formatFeatureValue(value);
+    if (formatted && !result.some((item) => normalizeFeature(item) === normalizeFeature(formatted))) result.push(formatted);
+  };
+  const addRam = () => {
+    if (!ram) return;
+    const value = formatFeatureValue(ram);
+    add(/(?:ОЗУ|RAM)/i.test(value) ? value : `${value} \u041e\u0417\u0423`);
+  };
+
+  if (isIphone) {
+    add(storage);
+    add(sim);
+  } else if (isIpad) {
+    add(storage);
+    add(connectivity);
+  } else if (isMacBook) {
+    addRam();
+    add(storage);
+  } else if (isSamsung) {
+    addRam();
+    add(storage);
+    add(sim);
+  } else {
+    add(storage);
+    const priorities: Record<string, string[]> = {
+      smartphones: ["ram", "simType", "connectivity", "size", "chip"],
+      tablets: ["connectivity", "simType", "size", "material", "chip"],
+      laptops: ["ram", "connectivity", "size", "material", "chip"],
+      gaming: ["connectivity", "size", "material", "generation"],
+      appliances: ["power", "size", "material", "resolution"],
+      accessories: ["size", "material", "resolution"],
+    };
+    for (const key of priorities[product.category.slug] ?? ["size", "material", "resolution"]) {
+      if (key === "ram") addRam();
+      else add(key === "chip" ? product.chip ?? "" : key === "generation" ? product.generation ?? "" : read(key, key === "simType" ? "sim" : key));
+    }
+  }
+  return result.slice(0, 3);
 }
 
 export function availabilityLabel(availability: CatalogVariantDto["availability"]) {
