@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiError, cityValidationError, findCity, imageUrl, publicAvailability, readOnly, readRequestUrl, validateCity, validateSlug } from "@/lib/catalog-api";
 import { parseJson } from "@/lib/catalog-dto";
+import { tradeInProductDetails } from "@/lib/trade-in-product";
+import { parseSlugAliases } from "@/lib/product-slug";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +14,14 @@ export async function GET(request: Request, { params }: { params: { slug: string
     const data = await readOnly(async (tx) => {
       const city = await findCity(tx, citySlug);
       if (!city) return null;
+      const currentProduct = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM products WHERE slug=${params.slug} LIMIT 1`;
+      let productId: string | undefined = currentProduct[0]?.id;
+      if (!productId) {
+      const aliasRows = await tx.$queryRaw<Array<{ value: unknown }>>`SELECT value FROM settings WHERE key='products.slugAliases' LIMIT 1`;
+        productId = parseSlugAliases(aliasRows[0]?.value).find((alias) => alias.slug === params.slug)?.productId;
+      }
+      if (!productId) return { city, rows: [], product: null };
+      const resolvedProductId = productId;
       const rows = await tx.$queryRaw<Array<{ id: string; slug: string; name: string; model: string | null; generation: string | null; chip: string | null; displaySize: string | null; releaseYear: number | null; description: unknown; specifications: unknown; isNew: boolean; brandId: string; brandName: string; brandSlug: string; typeId: string; typeName: string; typeSlug: string; typeAttributes: unknown; categoryId: string; categoryName: string; categorySlug: string; parentId: string | null; variantId: string; sku: string; label: string; storage: string | null; ram: string | null; simType: string | null; connectivity: string | null; size: string | null; material: string | null; attributes: unknown; colorId: string | null; colorName: string | null; colorNameRu: string | null; colorSlug: string | null; hexPrimary: string | null; hexSecondary: string | null; price: string | null; oldPrice: string | null; availability: string; allowPreorder: boolean; deliveryTime: string | null; imageId: string | null; imageOrder: number | null; imageColorId: string | null; imagePath: string | null; imageMimeType: string | null; imageAlt: string | null }>>`
         SELECT p.id, p.slug, p.name, p.model, p.generation, p.chip, p."displaySize", p."releaseYear", p.description, p.specifications, p."isNew",
                b.id AS "brandId", b.name AS "brandName", b.slug AS "brandSlug",
@@ -39,7 +49,7 @@ export async function GET(request: Request, { params }: { params: { slug: string
           JOIN media img ON img.id = cgi."mediaId"
           WHERE cg."productId" = p.id
         ) gallery ON TRUE
-        WHERE p.slug = ${params.slug} AND p.status = 'PUBLISHED'::"ProductStatus"
+        WHERE p.id = ${resolvedProductId} AND p.status = 'PUBLISHED'::"ProductStatus"
         ORDER BY pv.sku, gallery."sortOrder"
       `;
       if (rows.length === 0) return { city, rows, product: null };
@@ -98,11 +108,12 @@ export async function GET(request: Request, { params }: { params: { slug: string
           variant.attributes[publicKey] = entry.label;
         }
       }
-      return { city, product: { id: first.id, slug: first.slug, name: first.name, model: first.model, generation: first.generation, chip: first.chip, displaySize: first.displaySize, releaseYear: first.releaseYear, description: parseJson(first.description), specifications: parseJson(first.specifications), isNew: first.isNew, brand: { id: first.brandId, name: first.brandName, slug: first.brandSlug }, type: { id: first.typeId, name: first.typeName, slug: first.typeSlug, attributes: parseJson(first.typeAttributes) }, category: { id: first.categoryId, name: first.categoryName, slug: first.categorySlug, parentId: first.parentId }, city: { id: city.id, name: city.name, slug: city.slug }, variants: Array.from(variants.values()), images: Array.from(images.values()), relatedProductIds: relatedRows.map((row) => row.id) } };
+      const specifications = parseJson(first.specifications);
+      return { city, product: { id: first.id, slug: first.slug, name: first.name, model: first.model, generation: first.generation, chip: first.chip, displaySize: first.displaySize, releaseYear: first.releaseYear, description: parseJson(first.description), specifications, isNew: first.isNew, isUsed: tradeInProductDetails(specifications).isUsed, brand: { id: first.brandId, name: first.brandName, slug: first.brandSlug }, type: { id: first.typeId, name: first.typeName, slug: first.typeSlug, attributes: parseJson(first.typeAttributes) }, category: { id: first.categoryId, name: first.categoryName, slug: first.categorySlug, parentId: first.parentId }, city: { id: city.id, name: city.name, slug: city.slug }, variants: Array.from(variants.values()), images: Array.from(images.values()), relatedProductIds: relatedRows.map((row) => row.id) } };
     });
     if (!data) return NextResponse.json({ error: "City not found or inactive" }, { status: 404 });
     if (!data.product) return NextResponse.json({ error: "Published product not found for this city" }, { status: 404 });
-    return NextResponse.json({ data: data.product });
+    return NextResponse.json({ data: data.product, canonicalSlug: data.product.slug });
   } catch (error) {
     return apiError(error, "catalog.product.detail");
   }

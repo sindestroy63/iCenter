@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiError, imageUrl, readOnly } from "@/lib/catalog-api";
+import { TRADE_IN_CATEGORY_SLUG } from "@/lib/trade-in-product";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export async function GET() {
       ORDER BY c."sortOrder", c.name
     `);
     const data = rows.map(({ imagePath, imageMimeType, ...category }) => ({ ...category, imageUrl: imageUrl(imagePath, imageMimeType) }));
+    if (!data.some((category) => category.slug === TRADE_IN_CATEGORY_SLUG)) data.push({ id: TRADE_IN_CATEGORY_SLUG, name: "Trade-in — б/у", slug: TRADE_IN_CATEGORY_SLUG, parentId: null, order: 10000, imageUrl: null });
     return NextResponse.json({ data });
   } catch (error) {
     return apiError(error);

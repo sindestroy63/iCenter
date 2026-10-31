@@ -6,6 +6,7 @@ import {
 } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
 import { saveImages, saveVariants } from "@/lib/admin-product-write";
+import { allocateProductSlug, parseSlugAliases, productSlugBase as slugFromName } from "@/lib/product-slug";
 
 export const dynamic = "force-dynamic";
 
@@ -216,6 +217,10 @@ const productSchema = z
     images: z.array(imageSchema).max(100).default([]),
   })
   .superRefine((product, context) => {
+    if (product.specifications.tradeIn === true) {
+      const battery = product.specifications.tradeInBatteryHealth;
+      if (battery !== "" && battery !== undefined && (!Number.isInteger(battery) || Number(battery) < 0 || Number(battery) > 100)) context.addIssue({ code: "custom", path: ["specifications", "tradeInBatteryHealth"], message: "invalid battery health" });
+    }
     if (
       new Set(product.relatedProductIds).size !==
       product.relatedProductIds.length
@@ -305,61 +310,27 @@ async function syncRelatedProducts(
     await tx.$executeRaw`INSERT INTO product_related_products ("productId","relatedProductId","sortOrder") VALUES (${productId},${relatedProductId},${sortOrder})`;
   }
 }
-function slugFromName(value: string) {
-  const translit: Record<string, string> = {
-    а: "a",
-    б: "b",
-    в: "v",
-    г: "g",
-    д: "d",
-    е: "e",
-    ё: "yo",
-    ж: "zh",
-    з: "z",
-    и: "i",
-    й: "y",
-    к: "k",
-    л: "l",
-    м: "m",
-    н: "n",
-    о: "o",
-    п: "p",
-    р: "r",
-    с: "s",
-    т: "t",
-    у: "u",
-    ф: "f",
-    х: "h",
-    ц: "ts",
-    ч: "ch",
-    ш: "sh",
-    щ: "sch",
-    ъ: "",
-    ы: "y",
-    ь: "",
-    э: "e",
-    ю: "yu",
-    я: "ya",
-  };
-  return (
-    value
-      .toLowerCase()
-      .replace(/[а-яё]/g, (char) => translit[char] ?? "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "product"
-  );
-}
-
-async function uniqueSlug(tx: any, name: string) {
-  const normalized = slugFromName(name);
-  for (let suffix = 0; suffix < 10000; suffix++) {
-    const candidate = suffix === 0 ? normalized : `${normalized}-${suffix + 1}`;
+async function uniqueSlug(tx: any, name: string, excludeId?: string) {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('icenter-product-slugs', 0))`;
+  const aliasRows = await tx.$queryRaw<any[]>`SELECT value FROM settings WHERE key='products.slugAliases' LIMIT 1`;
+  const aliases = parseSlugAliases(aliasRows[0]?.value);
+  return allocateProductSlug(name, async (candidate) => {
     const found = await tx.$queryRaw<
       any[]
-    >`SELECT id FROM products WHERE slug=${candidate} LIMIT 1`;
-    if (!found.length) return candidate;
-  }
-  throw new Error("DUPLICATE_SLUG");
+    >`SELECT id FROM products WHERE slug=${candidate} AND (${excludeId ?? null}::text IS NULL OR id <> ${excludeId ?? null}) LIMIT 1`;
+    return !found.length && !aliases.some((alias) => alias.slug === candidate && alias.productId !== excludeId);
+  });
+}
+
+async function preserveSlugAlias(tx: any, oldSlug: string, productId: string) {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('icenter-product-slugs', 0))`;
+  const rows = await tx.$queryRaw<any[]>`SELECT value FROM settings WHERE key='products.slugAliases' LIMIT 1`;
+  const aliases = parseSlugAliases(rows[0]?.value).filter((alias) => alias.slug !== oldSlug);
+  aliases.push({ slug: oldSlug, productId });
+  await tx.$executeRaw`
+    INSERT INTO settings (id,key,value,description,"updatedAt") VALUES (${newId()},'products.slugAliases',${JSON.stringify({ aliases })}::jsonb,'Product slug aliases',NOW())
+    ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,"updatedAt"=NOW()
+  `;
 }
 
 function validationMessage(error: z.ZodError) {
@@ -886,7 +857,7 @@ export async function PATCH(request: Request) {
         if (!exists.length) throw new Error("NOT_FOUND");
         const current = await tx.$queryRaw<
           any[]
-        >`SELECT slug FROM products WHERE id=${productId} LIMIT 1`;
+        >`SELECT name,slug FROM products WHERE id=${productId} LIMIT 1`;
         if (!current.length) throw new Error("NOT_FOUND");
         const [brand, type, category, line] = await Promise.all([
           tx.$queryRaw<
@@ -914,7 +885,10 @@ export async function PATCH(request: Request) {
           product,
           currentModel[0]?.modelId ?? null,
         );
-        await tx.$executeRaw`UPDATE products SET name=${product.name},"brandId"=${product.brandId},"productTypeId"=${product.productTypeId},"productLineId"=${product.productLineId ?? null},"categoryId"=${product.categoryId},"modelId"=${selectedModel?.id ?? null},model=${selectedModel?.name ?? product.model ?? null},generation=${product.generation ?? null},chip=${product.chip ?? null},"displaySize"=${product.displaySize ?? null},"releaseYear"=${product.releaseYear ?? null},description=${JSON.stringify({ text: product.description })}::jsonb,specifications=${JSON.stringify(product.specifications)}::jsonb,"isNew"=${product.isNew},status=${product.status}::"ProductStatus","updatedAt"=NOW() WHERE id=${productId}`;
+        const nameChanged = String(current[0].name) !== product.name;
+        const nextSlug = nameChanged ? await uniqueSlug(tx, product.name, productId) : current[0].slug;
+        if (nextSlug !== current[0].slug) await preserveSlugAlias(tx, String(current[0].slug), productId);
+        await tx.$executeRaw`UPDATE products SET name=${product.name},slug=${nextSlug},"brandId"=${product.brandId},"productTypeId"=${product.productTypeId},"productLineId"=${product.productLineId ?? null},"categoryId"=${product.categoryId},"modelId"=${selectedModel?.id ?? null},model=${selectedModel?.name ?? product.model ?? null},generation=${product.generation ?? null},chip=${product.chip ?? null},"displaySize"=${product.displaySize ?? null},"releaseYear"=${product.releaseYear ?? null},description=${JSON.stringify({ text: product.description })}::jsonb,specifications=${JSON.stringify(product.specifications)}::jsonb,"isNew"=${product.isNew},status=${product.status}::"ProductStatus","updatedAt"=NOW() WHERE id=${productId}`;
         await saveVariants(tx, productId, product.variants);
         await syncDictionaryLinks(tx, productId, product.variants, product);
         await saveImages(tx, productId, product.images);

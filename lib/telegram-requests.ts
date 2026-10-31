@@ -2,6 +2,7 @@ import "server-only";
 
 import { PrismaClient } from "@prisma/client";
 import { decryptPii } from "@/lib/request-pii";
+import { deliverNotification, notificationMode, assertNotificationTestIsolation } from "@/lib/notification-transport";
 
 type TelegramResponse = { ok: boolean; result?: { message_id?: number }; description?: string };
 type TelegramTransport = (token: string, chatId: string, text: string) => Promise<TelegramResponse>;
@@ -10,6 +11,11 @@ const TELEGRAM_TIMEOUT_MS = 10_000;
 declare global { var telegramPrisma: PrismaClient | undefined; }
 
 const defaultTransport: TelegramTransport = async (token, chatId, text) => {
+  if (notificationMode() === "mock") {
+    assertNotificationTestIsolation();
+    await deliverNotification({ type: "telegram", recipient: "test-chat", text, createdAt: new Date().toISOString() });
+    return { ok: true, result: { message_id: Date.now() } };
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
   try {
@@ -38,8 +44,9 @@ export type TelegramSendResult = "sent" | "already-sent" | "not-configured" | "f
 
 export async function notifyRequest(orderNumber: string, transport: TelegramTransport = defaultTransport): Promise<TelegramSendResult> {
   const isTestTransport = transport !== defaultTransport;
-  const token = process.env.TELEGRAM_BOT_TOKEN ?? (isTestTransport ? "test-token" : undefined);
-  const chatId = process.env.TELEGRAM_REQUESTS_CHAT_ID ?? (isTestTransport ? "test-chat" : undefined);
+  if (notificationMode() === "mock") assertNotificationTestIsolation();
+  const token = process.env.TELEGRAM_BOT_TOKEN ?? (isTestTransport || notificationMode() === "mock" ? "test-token" : undefined);
+  const chatId = process.env.TELEGRAM_REQUESTS_CHAT_ID ?? (isTestTransport || notificationMode() === "mock" ? "test-chat" : undefined);
   if (!token || !chatId) return "not-configured";
   const client = db();
   const rows = await client.$queryRaw<any[]>`

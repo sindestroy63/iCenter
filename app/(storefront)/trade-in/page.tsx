@@ -1,5 +1,5 @@
-import StoreInfoPage from "@/components/StoreInfoPage";
+import TradeInPage from "@/components/TradeInPage";
 
 export default function Page() {
-  return <StoreInfoPage slug="trade-in" />;
+  return <TradeInPage />;
 }

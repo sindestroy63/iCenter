@@ -3,6 +3,7 @@ import "server-only";
 import { PrismaClient } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import { decryptPii, encryptPii, requestHash } from "@/lib/request-pii";
+import { dualConsentEvidence, PERSONAL_DATA_CONSENT_VERSION, type ConsentEvidence } from "@/lib/consent-evidence";
 
 declare global { var tradeInPrisma: PrismaClient | undefined; }
 const statuses = new Set(["NEW", "PROCESSING", "CONTACTED", "COMPLETED", "CANCELLED"]);
@@ -13,7 +14,12 @@ function db() {
   return globalThis.tradeInPrisma ??= new PrismaClient({ log: [] });
 }
 
-export type TradeInInput = { name: string; phone: string; device: string; condition: string; comment: string; city: string; productId?: string; productSlug?: string; consent: true };
+export type LeadRequestType = "trade_in" | "installment";
+export type TradeInInput = {
+  requestType: LeadRequestType; name: string; phone: string; brand: string; deviceType: string; device: string;
+  configuration: string; color: string; batteryHealth: number | null; equipment: string[]; condition: string; comment: string; desiredDevice: string; photoUrls: string[];
+  city: string; productId?: string; productSlug?: string; personalDataConsent: true; privacyConsent: true;
+};
 
 export async function createTradeInLead(input: TradeInInput, idempotencyKey: string) {
   if (!/^[\w-]{16,128}$/.test(idempotencyKey)) throw new Error("INVALID_IDEMPOTENCY_KEY");
@@ -34,15 +40,15 @@ export async function createTradeInLead(input: TradeInInput, idempotencyKey: str
     product = productRows[0] ?? null;
     if (!product) throw new Error("PRODUCT_UNAVAILABLE");
   }
-  const pii = { name: input.name.trim(), phone: input.phone.trim(), device: input.device.trim(), condition: input.condition.trim(), comment: input.comment.trim() };
-  const canonical = { ...pii, city: input.city, productId: product?.id ?? null, consent: true };
+  const pii = { requestType: input.requestType, origin: product ? "product" : "page", name: input.name.trim(), phone: input.phone.trim(), brand: input.brand.trim(), deviceType: input.deviceType.trim(), device: input.device.trim(), configuration: input.configuration.trim(), color: input.color.trim(), batteryHealth: input.batteryHealth, equipment: input.equipment, condition: input.condition.trim(), comment: input.comment.trim(), desiredDevice: input.desiredDevice.trim(), photoUrls: input.photoUrls, consentEvidence: dualConsentEvidence() };
+  const canonical = { ...pii, city: input.city, productId: product?.id ?? null, personalDataConsent: true, privacyConsent: true };
   const hash = requestHash(canonical);
   const encrypted = encryptPii(pii);
-  const requestNumber = `TI-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${randomBytes(4).toString("hex").toUpperCase()}`;
+  const requestNumber = `${input.requestType === "installment" ? "IN" : "TI"}-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${randomBytes(4).toString("hex").toUpperCase()}`;
   const id = `c${randomBytes(12).toString("hex")}`;
   const inserted = await client.$queryRaw<Array<{ requestNumber: string }>>`
     INSERT INTO trade_in_requests (id,"requestNumber","idempotencyKey","requestHash","cityId","productId","productNameSnapshot","encryptedPiiPayload",source,status,"consentAt","consentVersion","createdAt","updatedAt")
-    VALUES (${id},${requestNumber},${idempotencyKey},${hash},${city.id},${product?.id ?? null},${product?.name ?? null},${encrypted},'trade_in','NEW',NOW(),'personal-data-v2',NOW(),NOW())
+    VALUES (${id},${requestNumber},${idempotencyKey},${hash},${city.id},${product?.id ?? null},${product?.name ?? (input.desiredDevice.trim() || null)},${encrypted},'trade_in','NEW',NOW(),${PERSONAL_DATA_CONSENT_VERSION},NOW(),NOW())
     ON CONFLICT ("idempotencyKey") DO NOTHING
     RETURNING "requestNumber"
   `;
@@ -54,6 +60,10 @@ export async function createTradeInLead(input: TradeInInput, idempotencyKey: str
 }
 
 export type TradeInViewer = { userId: string; role: string };
+function adminPhotoUrl(value: string) {
+  return /^\/uploads\/\d{4}\/\d{2}\/lead-[a-f0-9]{32}\.(?:jpg|png|webp|avif)$/.test(value)
+    ? `/api/admin/lead-photo?path=${encodeURIComponent(value)}` : "";
+}
 export async function listTradeInLeads(viewer: TradeInViewer) {
   if (!["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"].includes(viewer.role)) throw new Error("FORBIDDEN");
   const client = db();
@@ -69,7 +79,10 @@ export async function listTradeInLeads(viewer: TradeInViewer) {
         FROM trade_in_requests lead JOIN cities city ON city.id=lead."cityId"
         ORDER BY lead."createdAt" DESC LIMIT 200
       `;
-  return rows.map((row) => ({ id: row.requestNumber, createdAt: row.createdAt, city: row.city, name: "" as string, phone: "" as string, device: "" as string, condition: "" as string, comment: "" as string, product: row.productNameSnapshot ?? "", status: row.status, _pii: row.encryptedPiiPayload })).map(({ _pii, ...row }) => ({ ...row, ...decryptPii<{ name: string; phone: string; device: string; condition: string; comment: string }>(_pii) }));
+  return rows.map((row) => ({ id: row.requestNumber, createdAt: row.createdAt, city: row.city, product: row.productNameSnapshot ?? "", status: row.status, _pii: row.encryptedPiiPayload })).map(({ _pii, ...row }) => {
+    const pii = decryptPii<Partial<{ requestType: LeadRequestType; origin: "page" | "product"; name: string; phone: string; brand: string; deviceType: string; device: string; configuration: string; color: string; batteryHealth: number | null; equipment: string[]; condition: string; comment: string; desiredDevice: string; photoUrls: string[]; consentEvidence: ConsentEvidence }>>(_pii);
+    return { ...row, requestType: pii.requestType ?? "trade_in", origin: pii.origin ?? (row.product ? "product" : "page"), name: pii.name ?? "", phone: pii.phone ?? "", brand: pii.brand ?? "", deviceType: pii.deviceType ?? "", device: pii.device ?? "", configuration: pii.configuration ?? "", color: pii.color ?? "", batteryHealth: pii.batteryHealth ?? null, equipment: Array.isArray(pii.equipment) ? pii.equipment : [], condition: pii.condition ?? "", comment: pii.comment ?? "", desiredDevice: pii.desiredDevice ?? row.product, photoUrls: Array.isArray(pii.photoUrls) ? pii.photoUrls.map(adminPhotoUrl).filter(Boolean) : [] };
+  });
 }
 
 export async function updateTradeInStatus(viewer: TradeInViewer, requestNumber: string, status: string) {

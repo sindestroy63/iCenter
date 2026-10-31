@@ -176,7 +176,7 @@ export default function AdminBannersBackend() {
       form.set("file", file);
       form.set("alt", `Баннер: ${selectedSlot?.label ?? "витрина"}`);
       form.set("purpose", "banner");
-      const response = await fetch("/api/admin/media", { method: "POST", headers: { "x-csrf-token": token }, body: form });
+      const response = await fetch("/api/admin/media", { method: "POST", headers: { "x-csrf-token": token, "x-upload-purpose": "banner" }, body: form });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(mediaError(body.error));
       const uploaded = body.data as Media;

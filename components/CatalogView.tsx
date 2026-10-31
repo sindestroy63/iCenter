@@ -3,25 +3,54 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowUpDown, Check, ChevronDown, Grid2X2, List, PackageOpen, Search, SlidersHorizontal, X } from "lucide-react";
+import {
+  ArrowUpDown,
+  Check,
+  ChevronDown,
+  Grid2X2,
+  List,
+  PackageOpen,
+  Search,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import { useStoreState } from "./StoreState";
-import { productVariantImage, variantAttribute, type CatalogProductDto, type CatalogVariantDto } from "./catalogClient";
-import { compareMemoryValues, dictionaryValuesMatch } from "@/lib/product-dictionaries";
+import {
+  productVariantImage,
+  variantAttribute,
+  type CatalogProductDto,
+  type CatalogVariantDto,
+} from "./catalogClient";
+import {
+  compareMemoryValues,
+  dictionaryValuesMatch,
+} from "@/lib/product-dictionaries";
 import { catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
-import { expandCatalogSearchQuery, normalizeCatalogSearchQuery } from "@/lib/catalog-search";
+import {
+  expandCatalogSearchQuery,
+  normalizeCatalogSearchQuery,
+} from "@/lib/catalog-search";
 import CatalogProductCard from "./CatalogProductCard";
 import ColorName from "./ColorName";
+import { catalogSectionTitle } from "@/lib/catalog-section-context";
 
-async function loadCatalogProducts(city: string, signal: AbortSignal, filters?: URLSearchParams): Promise<CatalogProductDto[]> {
+async function loadCatalogProducts(
+  city: string,
+  signal: AbortSignal,
+  filters?: URLSearchParams,
+): Promise<CatalogProductDto[]> {
   const all: CatalogProductDto[] = [];
   for (let offset = 0; offset <= 10000; offset += 100) {
     const params = new URLSearchParams(filters);
     params.set("city", city);
     params.set("limit", "100");
     params.set("offset", String(offset));
-    const response = await fetch(`/api/catalog/products?${params}`, { signal, cache: "no-store" });
+    const response = await fetch(`/api/catalog/products?${params}`, {
+      signal,
+      cache: "no-store",
+    });
     if (!response.ok) throw new Error("Catalog metadata request failed");
-    const body = await response.json() as { data: CatalogProductDto[] };
+    const body = (await response.json()) as { data: CatalogProductDto[] };
     const page = Array.isArray(body.data) ? body.data : [];
     all.push(...page);
     if (page.length < 100) break;
@@ -33,21 +62,50 @@ type CatalogEntry = { product: CatalogProductDto; variant: CatalogVariantDto };
 
 function catalogEntries(products: CatalogProductDto[]): CatalogEntry[] {
   const seen = new Set<string>();
-  return products.flatMap((product) => product.variants.flatMap((variant) => {
-    if (seen.has(variant.id)) return [];
-    seen.add(variant.id);
-    return [{ product, variant }];
-  }));
+  return products.flatMap((product) =>
+    product.variants.flatMap((variant) => {
+      if (seen.has(variant.id)) return [];
+      seen.add(variant.id);
+      return [{ product, variant }];
+    }),
+  );
 }
 
 function ProductTile({ entry }: { entry: CatalogEntry }) {
   const { city } = useStoreState();
-  return <CatalogProductCard product={entry.product} variantId={entry.variant.id} city={city} layout="catalog" />;
+  return (
+    <CatalogProductCard
+      product={entry.product}
+      variantId={entry.variant.id}
+      city={city}
+      layout="catalog"
+    />
+  );
 }
 
-function FilterGroup({ title, children }: { title: string; children: React.ReactNode }) {
+function FilterGroup({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   const [expanded, setExpanded] = useState(false);
-  return <section className={`filter-group${expanded ? " expanded" : ""}`}><button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}><strong>{title}</strong><ChevronDown size={16} aria-hidden="true" /></button><div className="filter-group-panel"><div>{children}</div></div></section>;
+  return (
+    <section className={`filter-group${expanded ? " expanded" : ""}`}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <strong>{title}</strong>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      <div className="filter-group-panel">
+        <div>{children}</div>
+      </div>
+    </section>
+  );
 }
 
 const sortOptions = [
@@ -58,27 +116,102 @@ const sortOptions = [
   ["priceDesc", "Сначала дорогие"],
 ] as const;
 
-function CatalogSort({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function CatalogSort({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(() => Math.max(0, sortOptions.findIndex(([option]) => option === value)));
+  const [activeIndex, setActiveIndex] = useState(() =>
+    Math.max(
+      0,
+      sortOptions.findIndex(([option]) => option === value),
+    ),
+  );
   const rootRef = useRef<HTMLDivElement>(null);
-  const selectedLabel = sortOptions.find(([option]) => option === value)?.[1] ?? sortOptions[0][1];
-  useEffect(() => { setActiveIndex(Math.max(0, sortOptions.findIndex(([option]) => option === value))); }, [value]);
+  const selectedLabel =
+    sortOptions.find(([option]) => option === value)?.[1] ?? sortOptions[0][1];
+  useEffect(() => {
+    setActiveIndex(
+      Math.max(
+        0,
+        sortOptions.findIndex(([option]) => option === value),
+      ),
+    );
+  }, [value]);
   useEffect(() => {
     if (!open) return;
-    const close = (event: PointerEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const close = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
-  const choose = (next: string) => { onChange(next); setOpen(false); };
-  return <div className={`catalog-sort${open ? " open" : ""}`} ref={rootRef} onKeyDown={(event) => {
-    if (event.key === "Escape") { setOpen(false); return; }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); setActiveIndex((index) => event.key === "ArrowDown" ? Math.min(index + 1, sortOptions.length - 1) : Math.max(index - 1, 0)); }
-    if (event.key === "Enter" && open) { event.preventDefault(); choose(sortOptions[activeIndex][0]); }
-  }}>
-    <button className="catalog-sort-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}><ArrowUpDown size={16} aria-hidden="true" /><span>{selectedLabel}</span><ChevronDown size={15} aria-hidden="true" /></button>
-    {open && <div className="catalog-sort-menu" role="listbox" aria-label="Сортировка товаров">{sortOptions.map(([option, label], index) => <button key={option} type="button" role="option" aria-selected={value === option} className={activeIndex === index ? "active" : ""} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(option)}><span>{label}</span>{value === option && <Check size={15} aria-hidden="true" />}</button>)}</div>}
-  </div>;
+  const choose = (next: string) => {
+    onChange(next);
+    setOpen(false);
+  };
+  return (
+    <div
+      className={`catalog-sort${open ? " open" : ""}`}
+      ref={rootRef}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          setOpen(false);
+          return;
+        }
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          setOpen(true);
+          setActiveIndex((index) =>
+            event.key === "ArrowDown"
+              ? Math.min(index + 1, sortOptions.length - 1)
+              : Math.max(index - 1, 0),
+          );
+        }
+        if (event.key === "Enter" && open) {
+          event.preventDefault();
+          choose(sortOptions[activeIndex][0]);
+        }
+      }}
+    >
+      <button
+        className="catalog-sort-trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <ArrowUpDown size={16} aria-hidden="true" />
+        <span>{selectedLabel}</span>
+        <ChevronDown size={15} aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          className="catalog-sort-menu"
+          role="listbox"
+          aria-label="Сортировка товаров"
+        >
+          {sortOptions.map(([option, label], index) => (
+            <button
+              key={option}
+              type="button"
+              role="option"
+              aria-selected={value === option}
+              className={activeIndex === index ? "active" : ""}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => choose(option)}
+            >
+              <span>{label}</span>
+              {value === option && <Check size={15} aria-hidden="true" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function variantPrice(variant: CatalogVariantDto) {
@@ -90,12 +223,27 @@ function entryMatchesSearch(entry: CatalogEntry, query: string) {
   const normalized = normalizeCatalogSearchQuery(query);
   if (!normalized) return true;
   const { product, variant } = entry;
-  const haystack = normalizeCatalogSearchQuery([
-    product.name, product.brand.name, product.category.name, product.type.name,
-    variant.sku, variant.label, variant.color?.name, variant.color?.nameRu,
-    ...Object.values(variant.attributes ?? {}).filter((value): value is string | number => typeof value === "string" || typeof value === "number"),
-  ].filter(Boolean).join(" "));
-  return expandCatalogSearchQuery(normalized).some((candidate) => candidate.split(" ").every((token) => haystack.includes(token)));
+  const haystack = normalizeCatalogSearchQuery(
+    [
+      product.name,
+      product.brand.name,
+      product.category.name,
+      product.type.name,
+      variant.sku,
+      variant.label,
+      variant.color?.name,
+      variant.color?.nameRu,
+      ...Object.values(variant.attributes ?? {}).filter(
+        (value): value is string | number =>
+          typeof value === "string" || typeof value === "number",
+      ),
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+  return expandCatalogSearchQuery(normalized).some((candidate) =>
+    candidate.split(" ").every((token) => haystack.includes(token)),
+  );
 }
 
 function parsePrice(value: string) {
@@ -106,15 +254,51 @@ function parsePrice(value: string) {
 }
 
 function globalType(product: CatalogProductDto) {
-  const source = `${product.type.slug} ${product.type.name}`.toLocaleLowerCase("ru-RU");
-  if (/galaxy|iphone/.test(source)) return { slug: "smartphone", name: "Смартфон" };
-  if (/ipad|tablet|планшет/.test(source)) return { slug: "tablet", name: "Планшет" };
-  if (/playstation|console|консол/.test(source)) return { slug: "console", name: "Игровая консоль" };
-  if (/vacuum|пылесос|dyson/.test(source)) return { slug: "vacuum", name: "Пылесос" };
+  const source = `${product.type.slug} ${product.type.name}`.toLocaleLowerCase(
+    "ru-RU",
+  );
+  if (/galaxy|iphone/.test(source))
+    return { slug: "smartphone", name: "Смартфон" };
+  if (/ipad|tablet|планшет/.test(source))
+    return { slug: "tablet", name: "Планшет" };
+  if (/playstation|console|консол/.test(source))
+    return { slug: "console", name: "Игровая консоль" };
+  if (/vacuum|пылесос|dyson/.test(source))
+    return { slug: "vacuum", name: "Пылесос" };
   return null;
 }
 
-export default function CatalogView({ query = "", title = "Каталог", brand = "", category = "", memory = "", color = "", sim = "", ram = "", typeFilter = "" }: { query?: string; title?: string; brand?: string; category?: string; memory?: string; color?: string; sim?: string; ram?: string; typeFilter?: string }) {
+export default function CatalogView({
+  query = "",
+  title = "Каталог",
+  brand = "",
+  category = "",
+  memory = "",
+  color = "",
+  sim = "",
+  ram = "",
+  typeFilter = "",
+  section = "",
+  menuItem = "",
+  scopeBrand = "",
+  scopeCategory = "",
+  scopeType = "",
+}: {
+  query?: string;
+  title?: string;
+  brand?: string;
+  category?: string;
+  memory?: string;
+  color?: string;
+  sim?: string;
+  ram?: string;
+  typeFilter?: string;
+  section?: string;
+  menuItem?: string;
+  scopeBrand?: string;
+  scopeCategory?: string;
+  scopeType?: string;
+}) {
   const { city, toggleFavorite, isFavorite } = useStoreState();
   const [search, setSearch] = useState(query);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -134,8 +318,12 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   const [selectedConnectivity, setSelectedConnectivity] = useState("");
   const [selectedAvailability, setSelectedAvailability] = useState("");
   const [products, setProducts] = useState<CatalogProductDto[]>([]);
-  const [catalogUniverse, setCatalogUniverse] = useState<CatalogProductDto[]>([]);
-  const [categoryOptions, setCategoryOptions] = useState<[string, string][]>([]);
+  const [catalogUniverse, setCatalogUniverse] = useState<CatalogProductDto[]>(
+    [],
+  );
+  const [categoryOptions, setCategoryOptions] = useState<[string, string][]>(
+    [],
+  );
   const [typeOptions, setTypeOptions] = useState<[string, string][]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -143,18 +331,111 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   const pathname = usePathname();
   const [brandOptions, setBrandOptions] = useState<[string, string][]>([]);
   const searchRef = useRef<HTMLDivElement>(null);
+  const [menuTitle, setMenuTitle] = useState("");
+  const [menuScope, setMenuScope] = useState<{
+    brand?: string;
+    type?: string;
+    category?: string;
+  } | null>(null);
+  const [menuScopeLoaded, setMenuScopeLoaded] = useState(false);
+  const [menuCleared, setMenuCleared] = useState(false);
+  const effectiveMenuItem = menuCleared ? "" : menuItem;
+  const pageTitle = menuTitle || catalogSectionTitle(section) || title;
 
-  useEffect(() => { setSearch(query); }, [query]);
-  useEffect(() => { setSelectedCategory(category); }, [category]);
-  useEffect(() => { setSelectedBrand(brand); }, [brand]);
-  useEffect(() => { setSelectedMemory(memory); }, [memory]);
-  useEffect(() => { setSelectedColor(color); }, [color]);
-  useEffect(() => { setSelectedSim(sim); }, [sim]);
-  useEffect(() => { setSelectedRam(ram); }, [ram]);
-  useEffect(() => { setSelectedType(typeFilter); }, [typeFilter]);
+  useEffect(() => {
+    setSearch(query);
+  }, [query]);
+  useEffect(() => {
+    setSelectedCategory(category);
+  }, [category]);
+  useEffect(() => {
+    setSelectedBrand(brand);
+  }, [brand]);
+  useEffect(() => {
+    setSelectedMemory(memory);
+  }, [memory]);
+  useEffect(() => {
+    setSelectedColor(color);
+  }, [color]);
+  useEffect(() => {
+    setSelectedSim(sim);
+  }, [sim]);
+  useEffect(() => {
+    setSelectedRam(ram);
+  }, [ram]);
+  useEffect(() => {
+    setSelectedType(typeFilter);
+  }, [typeFilter]);
+  useEffect(() => {
+    if (!menuItem) {
+      setMenuTitle("");
+      setMenuScope(null);
+      setMenuScopeLoaded(false);
+      return;
+    }
+    const controller = new AbortController();
+    fetch(`/api/catalog/menu?city=${encodeURIComponent(city)}`, {
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then((response) => (response.ok ? response.json() : Promise.reject()))
+      .then((body) => {
+        const roots = Array.isArray(body.data)
+          ? (body.data as Array<{
+              id: string;
+              title: string;
+              filters?: {
+                brand?: string;
+                type?: string;
+                category?: string | null;
+              } | null;
+              children?: Array<{
+                id: string;
+                title: string;
+                filters?: {
+                  brand?: string;
+                  type?: string;
+                  category?: string | null;
+                } | null;
+              }>;
+            }>)
+          : [];
+        const node = roots
+          .flatMap((root) => [root, ...(root.children ?? [])])
+          .find((item) => item.id === menuItem);
+        setMenuTitle(node?.title ?? "Каталог");
+        setMenuScope(
+          node?.filters
+            ? {
+                brand: node.filters.brand ?? undefined,
+                type: node.filters.type ?? undefined,
+                category: node.filters.category ?? undefined,
+              }
+            : null,
+        );
+        setMenuScopeLoaded(true);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setMenuTitle("Каталог");
+          setMenuScope(null);
+          setMenuScopeLoaded(true);
+        }
+      });
+    return () => controller.abort();
+  }, [city, menuItem]);
+  useEffect(() => {
+    if (!menuItem || !menuScopeLoaded || !menuScope) return;
+    setSelectedBrand(menuScope.brand ?? "");
+    setSelectedType(menuScope.type ?? "");
+    setSelectedCategory(menuScope.category ?? "");
+  }, [menuItem, menuScopeLoaded, menuScope]);
   useEffect(() => {
     if (!showSuggestions) return;
-    const close = (event: PointerEvent) => { if (!searchRef.current?.contains(event.target as Node)) setShowSuggestions(false); };
+    const close = (event: PointerEvent) => {
+      if (!searchRef.current?.contains(event.target as Node))
+        setShowSuggestions(false);
+    };
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [showSuggestions]);
@@ -180,7 +461,12 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const initialSort = params.get("sort");
-    if (["name", "category", "new", "priceAsc", "priceDesc"].includes(initialSort ?? "")) setSort(initialSort!);
+    if (
+      ["name", "category", "new", "priceAsc", "priceDesc"].includes(
+        initialSort ?? "",
+      )
+    )
+      setSort(initialSort!);
     setMinPrice(params.get("minPrice") ?? "");
     setMaxPrice(params.get("maxPrice") ?? "");
     setSelectedConnectivity(params.get("connectivity") ?? "");
@@ -190,52 +476,138 @@ export default function CatalogView({ query = "", title = "Каталог", bran
   useEffect(() => {
     const controller = new AbortController();
     Promise.all([
-      fetch("/api/catalog/categories", { signal: controller.signal, cache: "no-store" }).then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<{ data: { slug: string; name: string }[] }>; }),
-      fetch("/api/catalog/product-types", { signal: controller.signal, cache: "no-store" }).then(async (response) => { if (!response.ok) throw new Error(); return response.json() as Promise<{ data: { slug: string; name: string }[] }>; }),
-    ]).then(([categoryBody, typeBody]) => {
-      setCategoryOptions((categoryBody.data ?? []).map((item) => [item.slug, item.name]));
-      setTypeOptions((typeBody.data ?? []).map((item) => [item.slug, item.name]));
-    }).catch(() => { if (!controller.signal.aborted) { setCategoryOptions([]); setTypeOptions([]); } });
+      fetch("/api/catalog/categories", {
+        signal: controller.signal,
+        cache: "no-store",
+      }).then(async (response) => {
+        if (!response.ok) throw new Error();
+        return response.json() as Promise<{
+          data: { slug: string; name: string }[];
+        }>;
+      }),
+      fetch("/api/catalog/product-types", {
+        signal: controller.signal,
+        cache: "no-store",
+      }).then(async (response) => {
+        if (!response.ok) throw new Error();
+        return response.json() as Promise<{
+          data: { slug: string; name: string }[];
+        }>;
+      }),
+    ])
+      .then(([categoryBody, typeBody]) => {
+        setCategoryOptions(
+          (categoryBody.data ?? []).map((item) => [item.slug, item.name]),
+        );
+        setTypeOptions(
+          (typeBody.data ?? []).map((item) => [item.slug, item.name]),
+        );
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setCategoryOptions([]);
+          setTypeOptions([]);
+        }
+      });
     return () => controller.abort();
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/catalog/brands", { signal: controller.signal, cache: "no-store" })
-      .then(async (response) => { if (!response.ok) throw new Error("Brands request failed"); return response.json() as Promise<{ data: { slug: string; name: string }[] }>; })
-      .then((body) => setBrandOptions(Array.isArray(body.data) ? body.data.map((item) => [item.slug, item.name]) : []))
+    fetch("/api/catalog/brands", {
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Brands request failed");
+        return response.json() as Promise<{
+          data: { slug: string; name: string }[];
+        }>;
+      })
+      .then((body) =>
+        setBrandOptions(
+          Array.isArray(body.data)
+            ? body.data.map((item) => [item.slug, item.name])
+            : [],
+        ),
+      )
       .catch(() => setBrandOptions([]));
     return () => controller.abort();
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    loadCatalogProducts(city, controller.signal)
+    const filters = new URLSearchParams();
+    if (effectiveMenuItem) filters.set("menuItem", effectiveMenuItem);
+    loadCatalogProducts(city, controller.signal, filters)
       .then(setCatalogUniverse)
-      .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) setCatalogUniverse([]); });
+      .catch((cause: unknown) => {
+        if (!(cause instanceof DOMException && cause.name === "AbortError"))
+          setCatalogUniverse([]);
+      });
     return () => controller.abort();
-  }, [city]);
+  }, [city, effectiveMenuItem]);
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams();
     if (search.trim()) params.set("q", search.trim());
     if (selectedCategory) params.set("category", selectedCategory);
-    if (selectedBrand) params.set("brand", brandOptions.find(([slug, name]) => slug === selectedBrand || name === selectedBrand)?.[0] ?? selectedBrand);
+    if (selectedBrand)
+      params.set(
+        "brand",
+        brandOptions.find(
+          ([slug, name]) => slug === selectedBrand || name === selectedBrand,
+        )?.[0] ?? selectedBrand,
+      );
     if (selectedType) params.set("type", selectedType);
+    if (scopeBrand) params.set("scopeBrand", scopeBrand);
+    if (scopeCategory) params.set("scopeCategory", scopeCategory);
+    if (scopeType) params.set("scopeType", scopeType);
+    if (effectiveMenuItem) params.set("menuItem", effectiveMenuItem);
     if (selectedConnectivity) params.set("connectivity", selectedConnectivity);
     if (selectedMemory) params.set("memory", selectedMemory);
     if (selectedColor) params.set("color", selectedColor);
     if (selectedRam) params.set("ram", selectedRam);
     if (selectedSim) params.set("sim", selectedSim);
-    setLoading(true); setError(false);
+    setLoading(true);
+    setError(false);
     loadCatalogProducts(city, controller.signal, params)
       .then(setProducts)
-      .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) { setProducts([]); setError(true); } })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      .catch((cause: unknown) => {
+        if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+          setProducts([]);
+          setError(true);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
     return () => controller.abort();
-  }, [city, search, selectedCategory, selectedBrand, selectedType, selectedConnectivity, selectedMemory, selectedColor, selectedSim, selectedRam, brandOptions, retry]);
+  }, [
+    city,
+    search,
+    selectedCategory,
+    selectedBrand,
+    selectedType,
+    selectedConnectivity,
+    selectedMemory,
+    selectedColor,
+    selectedSim,
+    selectedRam,
+    effectiveMenuItem,
+    scopeBrand,
+    scopeCategory,
+    scopeType,
+    brandOptions,
+    retry,
+  ]);
 
   useEffect(() => {
     if (!urlReady) return;
     const params = new URLSearchParams();
+    if (section) params.set("section", section);
+    if (scopeBrand) params.set("scopeBrand", scopeBrand);
+    if (scopeCategory) params.set("scopeCategory", scopeCategory);
+    if (scopeType) params.set("scopeType", scopeType);
+    if (effectiveMenuItem) params.set("menuItem", effectiveMenuItem);
     if (search.trim()) params.set("q", search.trim());
     if (selectedCategory) params.set("category", selectedCategory);
     if (selectedBrand) params.set("brand", selectedBrand);
@@ -253,67 +625,769 @@ export default function CatalogView({ query = "", title = "Каталог", bran
     if (sort !== "name") params.set("sort", sort);
     const basePath = pathname === "/search" ? "/search" : "/catalog";
     const nextUrl = `${basePath}${params.size ? `?${params}` : ""}`;
-    if (`${window.location.pathname}${window.location.search}` !== nextUrl) window.history.replaceState(null, "", nextUrl);
-  }, [urlReady, pathname, search, selectedCategory, selectedBrand, selectedType, selectedMemory, selectedColor, selectedSim, selectedRam, selectedConnectivity, selectedAvailability, minPrice, maxPrice, sort]);
+    if (`${window.location.pathname}${window.location.search}` !== nextUrl)
+      window.history.replaceState(null, "", nextUrl);
+  }, [
+    urlReady,
+    pathname,
+    section,
+    effectiveMenuItem,
+    scopeBrand,
+    scopeCategory,
+    scopeType,
+    search,
+    selectedCategory,
+    selectedBrand,
+    selectedType,
+    selectedMemory,
+    selectedColor,
+    selectedSim,
+    selectedRam,
+    selectedConnectivity,
+    selectedAvailability,
+    minPrice,
+    maxPrice,
+    sort,
+  ]);
 
   const optionProducts = catalogUniverse.length ? catalogUniverse : products;
-  const categories = useMemo(() => categoryOptions.length ? categoryOptions : Array.from(new Map(optionProducts.map((p) => [p.category.slug, p.category.name])).entries()), [optionProducts, categoryOptions]);
-  const brands = useMemo(() => brandOptions.length ? brandOptions : Array.from(new Map(optionProducts.map((p) => [p.brand.slug, p.brand.name])).entries()), [optionProducts, brandOptions]);
-  const memories = useMemo(() => Array.from(new Set(optionProducts.flatMap((p) => p.variants.map((v) => variantAttribute(v, "storage")).filter(Boolean)))).sort(compareMemoryValues), [optionProducts]);
-  const colors = useMemo(() => Array.from(new Map(optionProducts.flatMap((p) => p.variants.flatMap((v) => v.color ? [[v.color.id, v.color] as const] : []))).values()).sort((a,b) => catalogColorLabel(a).localeCompare(catalogColorLabel(b),"ru")), [optionProducts]);
-  const sims = useMemo(() => Array.from(new Set(optionProducts.flatMap((p) => p.variants.map((v) => variantAttribute(v, "simType")).filter(Boolean)))), [optionProducts]);
-  const rams = useMemo(() => Array.from(new Set(optionProducts.flatMap((p) => p.variants.map((v) => variantAttribute(v, "ram")).filter(Boolean)))).sort(compareMemoryValues), [optionProducts]);
-  const types = useMemo(() => Array.from(new Map(optionProducts.map(globalType).filter((item): item is NonNullable<ReturnType<typeof globalType>> => Boolean(item)).map((item) => [item.slug, item.name])).entries()), [optionProducts]);
+  const categories = useMemo(
+    () =>
+      categoryOptions.length
+        ? categoryOptions
+        : Array.from(
+            new Map(
+              optionProducts.map((p) => [p.category.slug, p.category.name]),
+            ).entries(),
+          ),
+    [optionProducts, categoryOptions],
+  );
+  const brands = useMemo(
+    () =>
+      brandOptions.length
+        ? brandOptions
+        : Array.from(
+            new Map(
+              optionProducts.map((p) => [p.brand.slug, p.brand.name]),
+            ).entries(),
+          ),
+    [optionProducts, brandOptions],
+  );
+  const memories = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          optionProducts.flatMap((p) =>
+            p.variants
+              .map((v) => variantAttribute(v, "storage"))
+              .filter(Boolean),
+          ),
+        ),
+      ).sort(compareMemoryValues),
+    [optionProducts],
+  );
+  const colors = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          optionProducts.flatMap((p) =>
+            p.variants.flatMap((v) =>
+              v.color ? [[v.color.id, v.color] as const] : [],
+            ),
+          ),
+        ).values(),
+      ).sort((a, b) =>
+        catalogColorLabel(a).localeCompare(catalogColorLabel(b), "ru"),
+      ),
+    [optionProducts],
+  );
+  const sims = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          optionProducts.flatMap((p) =>
+            p.variants
+              .map((v) => variantAttribute(v, "simType"))
+              .filter(Boolean),
+          ),
+        ),
+      ),
+    [optionProducts],
+  );
+  const rams = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          optionProducts.flatMap((p) =>
+            p.variants.map((v) => variantAttribute(v, "ram")).filter(Boolean),
+          ),
+        ),
+      ).sort(compareMemoryValues),
+    [optionProducts],
+  );
+  const types = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          optionProducts
+            .map(globalType)
+            .filter(
+              (item): item is NonNullable<ReturnType<typeof globalType>> =>
+                Boolean(item),
+            )
+            .map((item) => [item.slug, item.name]),
+        ).entries(),
+      ),
+    [optionProducts],
+  );
   const additionalFilters: Array<[string, string[]]> = [];
-  const connectivityOptions = useMemo(() => Array.from(new Set(optionProducts.flatMap((p) => p.variants.map((v) => variantAttribute(v, "connectivity")).filter(Boolean)))).sort((a, b) => a.localeCompare(b, "ru")), [optionProducts]);
+  const connectivityOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          optionProducts.flatMap((p) =>
+            p.variants
+              .map((v) => variantAttribute(v, "connectivity"))
+              .filter(Boolean),
+          ),
+        ),
+      ).sort((a, b) => a.localeCompare(b, "ru")),
+    [optionProducts],
+  );
   const productEntries = useMemo(() => catalogEntries(products), [products]);
-  const universeEntries = useMemo(() => catalogEntries(optionProducts), [optionProducts]);
+  const universeEntries = useMemo(
+    () => catalogEntries(optionProducts),
+    [optionProducts],
+  );
   const minPriceValue = parsePrice(minPrice);
   const maxPriceValue = parsePrice(maxPrice);
-  const invalidPriceRange = minPriceValue !== null && maxPriceValue !== null && minPriceValue > maxPriceValue;
-  const filtered = useMemo(() => productEntries.filter(({ product, variant }) => {
-    if (!entryMatchesSearch({ product, variant }, search)) return false;
-    if (selectedType && globalType(product)?.slug !== selectedType) return false;
-    if (selectedMemory && !dictionaryValuesMatch("memory", variantAttribute(variant, "storage"), selectedMemory)) return false;
-    if (selectedColor && variant.color?.name !== selectedColor && variant.color?.id !== selectedColor && variant.color?.slug !== selectedColor) return false;
-    if (selectedRam && !dictionaryValuesMatch("ram", variantAttribute(variant, "ram"), selectedRam)) return false;
-    if (selectedSim && !dictionaryValuesMatch("sim", variantAttribute(variant, "simType"), selectedSim)) return false;
-    if (selectedConnectivity && variantAttribute(variant, "connectivity") !== selectedConnectivity) return false;
-    if (selectedAvailability && variant.availability !== selectedAvailability) return false;
-    const price = variantPrice(variant);
-    if (invalidPriceRange || minPriceValue !== null && (price === null || price < minPriceValue) || maxPriceValue !== null && (price === null || price > maxPriceValue)) return false;
-    return true;
-  }).sort((a, b) => {
-    if (sort === "name") return search.trim() ? 0 : a.product.name.localeCompare(b.product.name, "ru") || a.variant.label.localeCompare(b.variant.label, "ru");
-    if (sort === "category") return a.product.category.name.localeCompare(b.product.category.name, "ru") || a.product.name.localeCompare(b.product.name, "ru");
-    if (sort === "priceAsc" || sort === "priceDesc") {
-      const left = variantPrice(a.variant);
-      const right = variantPrice(b.variant);
-      if (left === null) return right === null ? a.product.name.localeCompare(b.product.name, "ru") : 1;
-      if (right === null) return -1;
-      return (sort === "priceAsc" ? left - right : right - left) || a.product.name.localeCompare(b.product.name, "ru");
-    }
-    return Number(b.product.isNew) - Number(a.product.isNew) || a.product.name.localeCompare(b.product.name, "ru");
-  }), [productEntries, search, selectedType, selectedConnectivity, selectedAvailability, selectedMemory, selectedColor, selectedSim, selectedRam, minPriceValue, maxPriceValue, invalidPriceRange, sort]);
+  const invalidPriceRange =
+    minPriceValue !== null &&
+    maxPriceValue !== null &&
+    minPriceValue > maxPriceValue;
+  const filtered = useMemo(
+    () =>
+      productEntries
+        .filter(({ product, variant }) => {
+          if (!entryMatchesSearch({ product, variant }, search)) return false;
+          if (
+            selectedMemory &&
+            !dictionaryValuesMatch(
+              "memory",
+              variantAttribute(variant, "storage"),
+              selectedMemory,
+            )
+          )
+            return false;
+          if (
+            selectedColor &&
+            variant.color?.name !== selectedColor &&
+            variant.color?.id !== selectedColor &&
+            variant.color?.slug !== selectedColor
+          )
+            return false;
+          if (
+            selectedRam &&
+            !dictionaryValuesMatch(
+              "ram",
+              variantAttribute(variant, "ram"),
+              selectedRam,
+            )
+          )
+            return false;
+          if (
+            selectedSim &&
+            !dictionaryValuesMatch(
+              "sim",
+              variantAttribute(variant, "simType"),
+              selectedSim,
+            )
+          )
+            return false;
+          if (
+            selectedConnectivity &&
+            variantAttribute(variant, "connectivity") !== selectedConnectivity
+          )
+            return false;
+          if (
+            selectedAvailability &&
+            variant.availability !== selectedAvailability
+          )
+            return false;
+          const price = variantPrice(variant);
+          if (
+            invalidPriceRange ||
+            (minPriceValue !== null &&
+              (price === null || price < minPriceValue)) ||
+            (maxPriceValue !== null &&
+              (price === null || price > maxPriceValue))
+          )
+            return false;
+          return true;
+        })
+        .sort((a, b) => {
+          if (sort === "name")
+            return search.trim()
+              ? 0
+              : a.product.name.localeCompare(b.product.name, "ru") ||
+                  a.variant.label.localeCompare(b.variant.label, "ru");
+          if (sort === "category")
+            return (
+              a.product.category.name.localeCompare(
+                b.product.category.name,
+                "ru",
+              ) || a.product.name.localeCompare(b.product.name, "ru")
+            );
+          if (sort === "priceAsc" || sort === "priceDesc") {
+            const left = variantPrice(a.variant);
+            const right = variantPrice(b.variant);
+            if (left === null)
+              return right === null
+                ? a.product.name.localeCompare(b.product.name, "ru")
+                : 1;
+            if (right === null) return -1;
+            return (
+              (sort === "priceAsc" ? left - right : right - left) ||
+              a.product.name.localeCompare(b.product.name, "ru")
+            );
+          }
+          return (
+            Number(b.product.isNew) - Number(a.product.isNew) ||
+            a.product.name.localeCompare(b.product.name, "ru")
+          );
+        }),
+    [
+      productEntries,
+      search,
+      selectedType,
+      selectedConnectivity,
+      selectedAvailability,
+      selectedMemory,
+      selectedColor,
+      selectedSim,
+      selectedRam,
+      minPriceValue,
+      maxPriceValue,
+      invalidPriceRange,
+      sort,
+    ],
+  );
   const suggestions = filtered.slice(0, 4);
-  const reset = () => { setSearch(""); setSelectedCategory(""); setSelectedBrand(""); setSelectedType(""); setSelectedConnectivity(""); setSelectedAvailability(""); setSelectedMemory(""); setSelectedColor(""); setSelectedSim(""); setSelectedRam(""); setMinPrice(""); setMaxPrice(""); setShowSuggestions(false); };
-  const clearSearch = () => { setSearch(""); setShowSuggestions(true); };
-  const tile = (entry: CatalogEntry) => <ProductTile key={entry.variant.id} entry={entry} />;
+  const reset = () => {
+    setMenuCleared(true);
+    setSearch("");
+    setSelectedCategory("");
+    setSelectedBrand("");
+    setSelectedType("");
+    setSelectedConnectivity("");
+    setSelectedAvailability("");
+    setSelectedMemory("");
+    setSelectedColor("");
+    setSelectedSim("");
+    setSelectedRam("");
+    setMinPrice("");
+    setMaxPrice("");
+    setShowSuggestions(false);
+  };
+  const chooseBrand = (value: string) => {
+    if (menuScope?.brand && value !== menuScope.brand) setMenuCleared(true);
+    setSelectedBrand(value);
+  };
+  const chooseType = (value: string) => {
+    if (menuScope?.type && value !== menuScope.type) setMenuCleared(true);
+    setSelectedType(value);
+  };
+  const chooseCategory = (value: string) => {
+    if (menuScope?.category && value !== menuScope.category)
+      setMenuCleared(true);
+    setSelectedCategory(value);
+  };
+  const clearSearch = () => {
+    setSearch("");
+    setShowSuggestions(true);
+  };
+  const tile = (entry: CatalogEntry) => (
+    <ProductTile key={entry.variant.id} entry={entry} />
+  );
 
-  return <div className="catalog-page layout-container">
-
-    <div className="catalog-heading"><div className="store-page-heading"><h1>{title}</h1><p>Выбирайте технику и аксессуары по выгодным ценам</p></div><button className="mobile-filter-btn" onClick={() => setMobileFilters((v) => !v)}><SlidersHorizontal size={17} />Фильтры</button></div>
-    <div className="catalog-search-row" ref={searchRef} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShowSuggestions(false); }}><label className="catalog-search"><Search size={19} /><input value={search} aria-expanded={showSuggestions} aria-controls="catalog-search-suggestions" autoComplete="off" onFocus={() => setShowSuggestions(true)} onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true); }} onKeyDown={(e) => { if (e.key === "Escape" || e.key === "Enter") setShowSuggestions(false); }} placeholder="Поиск товаров" />{search && <button type="button" aria-label="Очистить поиск" onClick={clearSearch}><X size={17} /></button>}</label>{showSuggestions && <div className="autocomplete" id="catalog-search-suggestions" role="listbox"><div className="autocomplete-products"><strong>{search.trim() ? "Результаты поиска" : "Товары каталога"}</strong>{loading ? <div className="catalog-suggestion-state">Поиск…</div> : suggestions.length ? suggestions.map(({ product, variant }) => { const price = variantPrice(variant); const suggestionImage = productVariantImage(product, variant); const structuredDescription = [variant.color?.name, variantAttribute(variant, "storage"), variantAttribute(variant, "simType")].filter(Boolean).join(" · "); const variantDescription = structuredDescription || (product.brand.slug === "dyson" ? product.category.name : variant.label || product.category.name); return <Link href={`/product/${encodeURIComponent(product.slug)}?variant=${encodeURIComponent(variant.id)}`} role="option" aria-selected="false" key={variant.id} onClick={() => setShowSuggestions(false)}><span className="suggestion-image">{suggestionImage ? <img src={suggestionImage} alt="" /> : <PackageOpen size={18} />}</span><span className="catalog-suggestion-copy"><b>{product.name}</b><small>{variantDescription}</small></span><em>{price === null ? "Уточнить цену" : `${price.toLocaleString("ru-RU")} ₽`}</em><span className="suggestion-arrow">›</span></Link>; }) : <div className="catalog-suggestion-state"><PackageOpen size={18} /><span>Товары не найдены</span></div>}</div></div>}</div>
-    <div className="catalog-layout">{mobileFilters && <button type="button" className="filters-backdrop" aria-label="Закрыть фильтры" onClick={() => setMobileFilters(false)} />}<aside className={`filters ${mobileFilters ? "filters-open" : ""}`}><div className="filters-title"><strong>Фильтры</strong><button onClick={() => setMobileFilters(false)} aria-label="Закрыть фильтры"><X size={18} /></button></div>
-      <FilterGroup title="Категория"><div className="filter-list"><label className={!selectedCategory ? "selected" : ""}><input type="radio" name="category" checked={!selectedCategory} onChange={() => setSelectedCategory("")} />Все результаты <span>{universeEntries.length}</span></label>{categories.map(([slug, name]) => <label className={selectedCategory === slug ? "selected" : ""} key={slug}><input type="radio" name="category" checked={selectedCategory === slug} onChange={() => setSelectedCategory(slug)} />{name}<span>{universeEntries.filter((entry) => entry.product.category.slug === slug).length}</span></label>)}</div></FilterGroup>
-      <FilterGroup title="Бренд"><div className="check-list"><label><input type="radio" name="brand" checked={!selectedBrand} onChange={() => setSelectedBrand("")} />Все бренды</label>{brands.map(([slug, name]) => <label key={slug}><input type="radio" name="brand" checked={selectedBrand === slug || selectedBrand === name} onChange={() => setSelectedBrand(slug)} />{name}</label>)}</div></FilterGroup><FilterGroup title="Тип товара"><div className="check-list"><label><input type="radio" name="type" checked={!selectedType} onChange={() => setSelectedType("")} />Все типы</label>{types.map(([slug, name]) => <label key={slug}><input type="radio" name="type" checked={selectedType === slug} onChange={() => setSelectedType(slug)} />{name}</label>)}</div></FilterGroup>
-      {[["Объём памяти", "memory", selectedMemory, setSelectedMemory, memories], ["SIM", "sim", selectedSim, setSelectedSim, sims]].map(([titleText, dictionary, selected, setter, values]) => <FilterGroup key={titleText as string} title={titleText as string}><div className="check-list"><label><input type="radio" name={titleText as string} checked={!selected} onChange={() => (setter as (v: string) => void)("")} />Любой</label>{(values as string[]).map((value) => <label key={value}><input type="radio" name={titleText as string} checked={Boolean(selected) && dictionaryValuesMatch(dictionary as "memory" | "sim", selected as string, value)} onChange={() => (setter as (v: string) => void)(value)} />{value}</label>)}</div></FilterGroup>)}
-      <FilterGroup title="Цвет"><div className="check-list color-filter-list"><label><input type="radio" name="Цвет" checked={!selectedColor} onChange={() => setSelectedColor("")} />Любой</label>{colors.map((color) => { const hex=catalogColorHex(color); return <label key={color.id}><input type="radio" name="Цвет" checked={selectedColor === color.name || selectedColor === color.id} onChange={() => setSelectedColor(color.name)} /><i className={hex ? "catalog-color-swatch" : "catalog-color-swatch neutral-color"} style={hex ? { background: hex } : undefined} aria-hidden="true" /><ColorName color={color} compact /></label>; })}</div></FilterGroup>
-      <FilterGroup title="RAM"><div className="check-list"><label><input type="radio" name="ram" checked={!selectedRam} onChange={() => setSelectedRam("")} />Любой</label>{rams.map((value) => <label key={value}><input type="radio" name="ram" checked={selectedRam === value} onChange={() => setSelectedRam(value)} />{value}</label>)}</div></FilterGroup>
-      <FilterGroup title="Подключение"><div className="check-list"><label><input type="radio" name="connectivity" checked={!selectedConnectivity} onChange={() => setSelectedConnectivity("")} />Любое</label>{connectivityOptions.map((value) => <label key={value}><input type="radio" name="connectivity" checked={selectedConnectivity === value} onChange={() => setSelectedConnectivity(value)} />{value}</label>)}</div></FilterGroup>
-      <FilterGroup title="Наличие"><div className="check-list"><label><input type="radio" name="availability" checked={!selectedAvailability} onChange={() => setSelectedAvailability("")} />Любое</label><label><input type="radio" name="availability" checked={selectedAvailability === "IN_STOCK"} onChange={() => setSelectedAvailability("IN_STOCK")} />В наличии</label><label><input type="radio" name="availability" checked={selectedAvailability === "PREORDER"} onChange={() => setSelectedAvailability("PREORDER")} />Под заказ</label><label><input type="radio" name="availability" checked={selectedAvailability === "OUT_OF_STOCK"} onChange={() => setSelectedAvailability("OUT_OF_STOCK")} />Нет в наличии</label></div></FilterGroup>
-      <FilterGroup title="Цена, ₽"><div className="catalog-price-filter"><label>От<input type="text" inputMode="decimal" value={minPrice} aria-invalid={Boolean(minPrice.trim()) && minPriceValue === null} onChange={(event) => setMinPrice(event.target.value)} placeholder="0" /></label><label>До<input type="text" inputMode="decimal" value={maxPrice} aria-invalid={Boolean(maxPrice.trim()) && maxPriceValue === null} onChange={(event) => setMaxPrice(event.target.value)} placeholder="Без лимита" /></label>{(Boolean(minPrice.trim()) && minPriceValue === null || Boolean(maxPrice.trim()) && maxPriceValue === null) && <small>Введите цену числом</small>}{invalidPriceRange && <small role="alert">Минимальная цена выше максимальной</small>}</div></FilterGroup>
-      <button className="filter-reset" onClick={reset}>Сбросить фильтры</button></aside><section className="catalog-results"><div className="catalog-toolbar"><CatalogSort value={sort} onChange={setSort} /><div className="view-toggle"><button className={view === "grid" ? "active" : ""} onClick={() => setView("grid")} aria-label="Сетка" aria-pressed={view === "grid"}><Grid2X2 size={18} /></button><button className={view === "list" ? "active" : ""} onClick={() => setView("list")} aria-label="Список" aria-pressed={view === "list"}><List size={18} /></button></div></div>
-      {error ? <div className="empty-state"><h2>Не удалось загрузить каталог</h2><p>Проверьте соединение и попробуйте снова.</p><button onClick={() => setRetry((value) => value + 1)}>Повторить</button></div> : loading ? <div className="loading-state">Загрузка каталога…</div> : filtered.length ? <div className={`catalog-grid ${view === "list" ? "list-view" : ""}`}>{filtered.map(tile)}</div> : <div className="empty-state"><Search size={32} /><h2>Ничего не найдено</h2><p>Для выбранного города подходящих товаров нет.</p><button onClick={reset}>Сбросить фильтры</button></div>}</section></div>
-  </div>;
+  return (
+    <div className="catalog-page layout-container">
+      <div className="catalog-heading">
+        <div className="store-page-heading">
+          <h1>{pageTitle}</h1>
+          <p>Выбирайте технику и аксессуары по выгодным ценам</p>
+        </div>
+        <button
+          className="mobile-filter-btn"
+          onClick={() => setMobileFilters((v) => !v)}
+        >
+          <SlidersHorizontal size={17} />
+          Фильтры
+        </button>
+      </div>
+      <div
+        className="catalog-search-row"
+        ref={searchRef}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setShowSuggestions(false);
+        }}
+      >
+        <label className="catalog-search">
+          <Search size={19} />
+          <input
+            value={search}
+            aria-expanded={showSuggestions}
+            aria-controls="catalog-search-suggestions"
+            autoComplete="off"
+            onFocus={() => setShowSuggestions(true)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setShowSuggestions(true);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" || e.key === "Enter")
+                setShowSuggestions(false);
+            }}
+            placeholder="Поиск товаров"
+          />
+          {search && (
+            <button
+              type="button"
+              aria-label="Очистить поиск"
+              onClick={clearSearch}
+            >
+              <X size={17} />
+            </button>
+          )}
+        </label>
+        {showSuggestions && (
+          <div
+            className="autocomplete"
+            id="catalog-search-suggestions"
+            role="listbox"
+          >
+            <div className="autocomplete-products">
+              <strong>
+                {search.trim() ? "Результаты поиска" : "Товары каталога"}
+              </strong>
+              {loading ? (
+                <div className="catalog-suggestion-state">Поиск…</div>
+              ) : suggestions.length ? (
+                suggestions.map(({ product, variant }) => {
+                  const price = variantPrice(variant);
+                  const suggestionImage = productVariantImage(product, variant);
+                  const structuredDescription = [
+                    variant.color?.name,
+                    variantAttribute(variant, "storage"),
+                    variantAttribute(variant, "simType"),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+                  const variantDescription =
+                    structuredDescription ||
+                    (product.brand.slug === "dyson"
+                      ? product.category.name
+                      : variant.label || product.category.name);
+                  return (
+                    <Link
+                      href={`/product/${encodeURIComponent(product.slug)}?variant=${encodeURIComponent(variant.id)}`}
+                      role="option"
+                      aria-selected="false"
+                      key={variant.id}
+                      onClick={() => setShowSuggestions(false)}
+                    >
+                      <span className="suggestion-image">
+                        {suggestionImage ? (
+                          <img src={suggestionImage} alt="" />
+                        ) : (
+                          <PackageOpen size={18} />
+                        )}
+                      </span>
+                      <span className="catalog-suggestion-copy">
+                        <b>{product.name}</b>
+                        <small>{variantDescription}</small>
+                      </span>
+                      <em>
+                        {price === null
+                          ? "Уточнить цену"
+                          : `${price.toLocaleString("ru-RU")} ₽`}
+                      </em>
+                      <span className="suggestion-arrow">›</span>
+                    </Link>
+                  );
+                })
+              ) : (
+                <div className="catalog-suggestion-state">
+                  <PackageOpen size={18} />
+                  <span>Товары не найдены</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="catalog-layout">
+        {mobileFilters && (
+          <button
+            type="button"
+            className="filters-backdrop"
+            aria-label="Закрыть фильтры"
+            onClick={() => setMobileFilters(false)}
+          />
+        )}
+        <aside className={`filters ${mobileFilters ? "filters-open" : ""}`}>
+          <div className="filters-title">
+            <strong>Фильтры</strong>
+            <button
+              onClick={() => setMobileFilters(false)}
+              aria-label="Закрыть фильтры"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <FilterGroup title="Категория">
+            <div className="filter-list">
+              <label className={!selectedCategory ? "selected" : ""}>
+                <input
+                  type="radio"
+                  name="category"
+                  checked={!selectedCategory}
+                  onChange={() => chooseCategory("")}
+                />
+                Все результаты <span>{universeEntries.length}</span>
+              </label>
+              {categories.map(([slug, name]) => (
+                <label
+                  className={selectedCategory === slug ? "selected" : ""}
+                  key={slug}
+                >
+                  <input
+                    type="radio"
+                    name="category"
+                    checked={selectedCategory === slug}
+                    onChange={() => chooseCategory(slug)}
+                  />
+                  {name}
+                  <span>
+                    {
+                      universeEntries.filter((entry) =>
+                        slug === "trade-in"
+                          ? entry.product.isUsed
+                          : entry.product.category.slug === slug,
+                      ).length
+                    }
+                  </span>
+                </label>
+              ))}
+            </div>
+          </FilterGroup>
+          <FilterGroup title="Бренд">
+            <div className="check-list">
+              <label>
+                <input
+                  type="radio"
+                  name="brand"
+                  checked={!selectedBrand}
+                  onChange={() => chooseBrand("")}
+                />
+                Все бренды
+              </label>
+              {brands.map(([slug, name]) => (
+                <label key={slug}>
+                  <input
+                    type="radio"
+                    name="brand"
+                    checked={selectedBrand === slug || selectedBrand === name}
+                    onChange={() => chooseBrand(slug)}
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+          </FilterGroup>
+          <FilterGroup title="Тип товара">
+            <div className="check-list">
+              <label>
+                <input
+                  type="radio"
+                  name="type"
+                  checked={!selectedType}
+                  onChange={() => chooseType("")}
+                />
+                Все типы
+              </label>
+              {types.map(([slug, name]) => (
+                <label key={slug}>
+                  <input
+                    type="radio"
+                    name="type"
+                    checked={selectedType === slug}
+                    onChange={() => chooseType(slug)}
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+          </FilterGroup>
+          {[
+            [
+              "Объём памяти",
+              "memory",
+              selectedMemory,
+              setSelectedMemory,
+              memories,
+            ],
+            ["SIM", "sim", selectedSim, setSelectedSim, sims],
+          ].map(([titleText, dictionary, selected, setter, values]) => (
+            <FilterGroup key={titleText as string} title={titleText as string}>
+              <div className="check-list">
+                <label>
+                  <input
+                    type="radio"
+                    name={titleText as string}
+                    checked={!selected}
+                    onChange={() => (setter as (v: string) => void)("")}
+                  />
+                  Любой
+                </label>
+                {(values as string[]).map((value) => (
+                  <label key={value}>
+                    <input
+                      type="radio"
+                      name={titleText as string}
+                      checked={
+                        Boolean(selected) &&
+                        dictionaryValuesMatch(
+                          dictionary as "memory" | "sim",
+                          selected as string,
+                          value,
+                        )
+                      }
+                      onChange={() => (setter as (v: string) => void)(value)}
+                    />
+                    {value}
+                  </label>
+                ))}
+              </div>
+            </FilterGroup>
+          ))}
+          <FilterGroup title="Цвет">
+            <div className="check-list color-filter-list">
+              <label>
+                <input
+                  type="radio"
+                  name="Цвет"
+                  checked={!selectedColor}
+                  onChange={() => setSelectedColor("")}
+                />
+                Любой
+              </label>
+              {colors.map((color) => {
+                const hex = catalogColorHex(color);
+                return (
+                  <label key={color.id}>
+                    <input
+                      type="radio"
+                      name="Цвет"
+                      checked={
+                        selectedColor === color.name ||
+                        selectedColor === color.id
+                      }
+                      onChange={() => setSelectedColor(color.name)}
+                    />
+                    <i
+                      className={
+                        hex
+                          ? "catalog-color-swatch"
+                          : "catalog-color-swatch neutral-color"
+                      }
+                      style={hex ? { background: hex } : undefined}
+                      aria-hidden="true"
+                    />
+                    <ColorName color={color} compact />
+                  </label>
+                );
+              })}
+            </div>
+          </FilterGroup>
+          <FilterGroup title="RAM">
+            <div className="check-list">
+              <label>
+                <input
+                  type="radio"
+                  name="ram"
+                  checked={!selectedRam}
+                  onChange={() => setSelectedRam("")}
+                />
+                Любой
+              </label>
+              {rams.map((value) => (
+                <label key={value}>
+                  <input
+                    type="radio"
+                    name="ram"
+                    checked={selectedRam === value}
+                    onChange={() => setSelectedRam(value)}
+                  />
+                  {value}
+                </label>
+              ))}
+            </div>
+          </FilterGroup>
+          <FilterGroup title="Подключение">
+            <div className="check-list">
+              <label>
+                <input
+                  type="radio"
+                  name="connectivity"
+                  checked={!selectedConnectivity}
+                  onChange={() => setSelectedConnectivity("")}
+                />
+                Любое
+              </label>
+              {connectivityOptions.map((value) => (
+                <label key={value}>
+                  <input
+                    type="radio"
+                    name="connectivity"
+                    checked={selectedConnectivity === value}
+                    onChange={() => setSelectedConnectivity(value)}
+                  />
+                  {value}
+                </label>
+              ))}
+            </div>
+          </FilterGroup>
+          <FilterGroup title="Наличие">
+            <div className="check-list">
+              <label>
+                <input
+                  type="radio"
+                  name="availability"
+                  checked={!selectedAvailability}
+                  onChange={() => setSelectedAvailability("")}
+                />
+                Любое
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="availability"
+                  checked={selectedAvailability === "IN_STOCK"}
+                  onChange={() => setSelectedAvailability("IN_STOCK")}
+                />
+                В наличии
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="availability"
+                  checked={selectedAvailability === "PREORDER"}
+                  onChange={() => setSelectedAvailability("PREORDER")}
+                />
+                Под заказ
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="availability"
+                  checked={selectedAvailability === "OUT_OF_STOCK"}
+                  onChange={() => setSelectedAvailability("OUT_OF_STOCK")}
+                />
+                Нет в наличии
+              </label>
+            </div>
+          </FilterGroup>
+          <FilterGroup title="Цена, ₽">
+            <div className="catalog-price-filter">
+              <label>
+                От
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={minPrice}
+                  aria-invalid={
+                    Boolean(minPrice.trim()) && minPriceValue === null
+                  }
+                  onChange={(event) => setMinPrice(event.target.value)}
+                  placeholder="0"
+                />
+              </label>
+              <label>
+                До
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={maxPrice}
+                  aria-invalid={
+                    Boolean(maxPrice.trim()) && maxPriceValue === null
+                  }
+                  onChange={(event) => setMaxPrice(event.target.value)}
+                  placeholder="Без лимита"
+                />
+              </label>
+              {((Boolean(minPrice.trim()) && minPriceValue === null) ||
+                (Boolean(maxPrice.trim()) && maxPriceValue === null)) && (
+                <small>Введите цену числом</small>
+              )}
+              {invalidPriceRange && (
+                <small role="alert">Минимальная цена выше максимальной</small>
+              )}
+            </div>
+          </FilterGroup>
+          <button className="filter-reset" onClick={reset}>
+            Сбросить фильтры
+          </button>
+        </aside>
+        <section className="catalog-results">
+          <div className="catalog-toolbar">
+            <CatalogSort value={sort} onChange={setSort} />
+            <div className="view-toggle">
+              <button
+                className={view === "grid" ? "active" : ""}
+                onClick={() => setView("grid")}
+                aria-label="Сетка"
+                aria-pressed={view === "grid"}
+              >
+                <Grid2X2 size={18} />
+              </button>
+              <button
+                className={view === "list" ? "active" : ""}
+                onClick={() => setView("list")}
+                aria-label="Список"
+                aria-pressed={view === "list"}
+              >
+                <List size={18} />
+              </button>
+            </div>
+          </div>
+          {error ? (
+            <div className="empty-state">
+              <h2>Не удалось загрузить каталог</h2>
+              <p>Проверьте соединение и попробуйте снова.</p>
+              <button onClick={() => setRetry((value) => value + 1)}>
+                Повторить
+              </button>
+            </div>
+          ) : loading ? (
+            <div className="loading-state">Загрузка каталога…</div>
+          ) : filtered.length ? (
+            <div
+              className={`catalog-grid ${view === "list" ? "list-view" : ""}`}
+            >
+              {filtered.map(tile)}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <Search size={32} />
+              <h2>Ничего не найдено</h2>
+              <p>Для выбранного города подходящих товаров нет.</p>
+              <button onClick={reset}>Сбросить фильтры</button>
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
 }

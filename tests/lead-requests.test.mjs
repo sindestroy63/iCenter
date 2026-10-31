@@ -1,0 +1,47 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { formatRussianPhone, isValidRussianPhone } from "../lib/phone.ts";
+
+const leadRoute = readFileSync(new URL("../lib/lead-request-route.ts", import.meta.url), "utf8");
+const tradeService = readFileSync(new URL("../lib/trade-in-service.ts", import.meta.url), "utf8");
+const checkout = readFileSync(new URL("../components/CheckoutFlow.tsx", import.meta.url), "utf8");
+const productTradeIn = readFileSync(new URL("../components/ProductDetailsLower.tsx", import.meta.url), "utf8");
+const leadForm = readFileSync(new URL("../components/LeadRequestForm.tsx", import.meta.url), "utf8");
+const adminRequests = readFileSync(new URL("../components/AdminRequestsBackend.tsx", import.meta.url), "utf8");
+const consentEvidence = readFileSync(new URL("../lib/consent-evidence.ts", import.meta.url), "utf8");
+const leadUpload = readFileSync(new URL("../lib/lead-upload.ts", import.meta.url), "utf8");
+const adminLeadPhoto = readFileSync(new URL("../app/api/admin/lead-photo/route.ts", import.meta.url), "utf8");
+
+assert.equal(formatRussianPhone("89991234567"), "+7 (999) 123-45-67");
+assert.equal(isValidRussianPhone("+7 (999) 123-45-67"), true);
+assert.equal(isValidRussianPhone("+7 (999) 123-45"), false);
+assert.match(leadRoute, /personalDataConsent:\s*z\.literal\(true\)/);
+assert.match(leadRoute, /privacyConsent:\s*z\.literal\(true\)/);
+assert.match(leadRoute, /saveLeadPhotos/);
+assert.match(leadRoute, /removeCreatedLeadPhotos\(savedPhotos\.createdFiles\)/);
+assert.match(leadUpload, /catch \(error\) \{\s*await removeFiles\(createdFiles\)/);
+assert.match(tradeService, /\/api\/admin\/lead-photo\?path=/);
+assert.match(adminLeadPhoto, /await requireRequestSession\(\)/);
+assert.match(adminLeadPhoto, /cache-control": "private, no-store"/);
+assert.match(adminLeadPhoto, /lead-\[a-f0-9\]\{32\}/);
+assert.match(consentEvidence, /PERSONAL_DATA_CONSENT_VERSION = "personal-data-v2"/);
+assert.match(consentEvidence, /privacyPolicy: \{ accepted: true/);
+assert.match(tradeService, /consentEvidence: dualConsentEvidence\(\)/);
+assert.match(checkout, /personalDataConsent: consents\.personalDataConsent/);
+assert.match(checkout, /privacyConsent: consents\.privacyConsent/);
+assert.match(tradeService, /requestType: pii\.requestType/);
+assert.match(checkout, /personalDataConsent: consents\.personalDataConsent/);
+assert.match(checkout, /privacyConsent: consents\.privacyConsent/);
+assert.match(productTradeIn, /<LeadRequestForm/);
+assert.match(leadForm, /form\.append\("photos", value\)/);
+assert.match(leadForm, /Бренд\s*<input/);
+assert.match(leadForm, /Линейка \/ тип\s*<input/);
+assert.match(leadForm, /Модель\s*<input/);
+assert.doesNotMatch(leadForm, /loadCatalog|catalogStatus|manualMode|<label>Бренд<select|<label>Линейка \/ тип<select|<label>Модель<select/);
+assert.doesNotMatch(leadForm, /Нет нужной модели/);
+assert.match(leadForm, /device: model/);
+assert.match(leadForm, /if \(value\.trim\(\)\) values\[key\] = value\.trim\(\)/);
+assert.match(adminRequests, /type=\$\{type\}/);
+assert.doesNotMatch(adminRequests, /type==="installment"\) \{ setLoading\(false\); return; \}/);
+
+console.log("Passed lead request, upload and dual-consent regression checks");

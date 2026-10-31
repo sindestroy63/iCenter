@@ -19,7 +19,9 @@ export async function GET() {
           OR EXISTS(SELECT 1 FROM brands b WHERE b."logoMediaId" = m.id)
           OR EXISTS(SELECT 1 FROM categories c WHERE c."imageMediaId" = m.id)
           OR EXISTS(SELECT 1 FROM services s WHERE s."imageMediaId" = m.id)
-          OR EXISTS(SELECT 1 FROM users u WHERE u."avatarMediaId" = m.id)) AS used
+          OR EXISTS(SELECT 1 FROM users u WHERE u."avatarMediaId" = m.id)
+          OR EXISTS(SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenuBanners' AND setting.value @> jsonb_build_object('banners',jsonb_build_array(jsonb_build_object('imageMediaId',m.id))))
+          OR EXISTS(SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenu' AND setting.value @> jsonb_build_object('items',jsonb_build_array(jsonb_build_object('banner',jsonb_build_object('imageMediaId',m.id)))))) AS used
       FROM media m ORDER BY m."uploadedAt" DESC
     `;
     return NextResponse.json({ data: rows.map((row) => ({ ...row, url: `/${row.storagePath}` })) });
@@ -34,19 +36,24 @@ export async function POST(request: Request) {
   let finalPath: string | undefined;
   try {
     const session = await requireGlobalAdminMutation(request);
-    const absoluteMaxBytes = bannerVideoMaxBytes();
+    const uploadPurpose = request.headers.get("x-upload-purpose");
+    if (uploadPurpose !== null && uploadPurpose !== "banner" && uploadPurpose !== "catalog-menu") return NextResponse.json({ error: "INVALID_UPLOAD_PURPOSE" }, { status: 400 });
+    const absoluteMaxBytes = uploadPurpose === "banner" ? bannerVideoMaxBytes() : IMAGE_UPLOAD_MAX_BYTES;
     const declaredLength = Number(request.headers.get("content-length") ?? 0);
     if (declaredLength > absoluteMaxBytes + 64 * 1024) return NextResponse.json({ error: "UPLOAD_TOO_LARGE" }, { status: 413 });
     const form = await request.formData();
     const file = form.get("file");
     const alt = form.get("alt");
     const purpose = form.get("purpose");
-    if (purpose !== null && purpose !== "banner") return NextResponse.json({ error: "INVALID_UPLOAD_PURPOSE" }, { status: 400 });
+    if (purpose !== null && purpose !== "banner" && purpose !== "catalog-menu") return NextResponse.json({ error: "INVALID_UPLOAD_PURPOSE" }, { status: 400 });
+    if (uploadPurpose !== null && uploadPurpose !== purpose) return NextResponse.json({ error: "INVALID_UPLOAD_PURPOSE" }, { status: 400 });
     if (!(file instanceof File) || file.size < 1 || file.size > absoluteMaxBytes || (alt !== null && typeof alt !== "string")) return NextResponse.json({ error: "INVALID_UPLOAD" }, { status: 400 });
     const bytes = Buffer.from(await file.arrayBuffer());
     const signature = detectUploadMedia(bytes);
     const extension = path.extname(file.name).toLowerCase();
+    if ((purpose === "banner" || purpose === "catalog-menu") && signature?.kind !== "image") return NextResponse.json({ error: "IMAGE_ONLY" }, { status: 415 });
     if (purpose === "banner" && signature?.mime === "image/avif") return NextResponse.json({ error: "BANNER_FORMAT_NOT_SUPPORTED" }, { status: 415 });
+    if (purpose === "catalog-menu" && (!signature || !["image/jpeg", "image/png", "image/webp"].includes(signature.mime))) return NextResponse.json({ error: "CATALOG_MENU_IMAGE_FORMAT_NOT_SUPPORTED" }, { status: 415 });
     if (signature?.kind === "video" && purpose !== "banner") return NextResponse.json({ error: "VIDEO_BANNER_ONLY" }, { status: 415 });
     const maxBytes = signature?.kind === "video" ? bannerVideoMaxBytes() : IMAGE_UPLOAD_MAX_BYTES;
     if (!signature || file.size > maxBytes || file.type !== signature.mime || !acceptedExtensions(signature).includes(extension)) return NextResponse.json({ error: "UNSUPPORTED_MEDIA" }, { status: 415 });

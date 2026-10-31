@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Search, MapPin, Heart, ShoppingCart, Menu, LayoutGrid, Truck, ShieldCheck, Headphones, ChevronDown, Check, X, Phone, Home, Info, BadgeRussianRuble, RefreshCw, Shield } from "lucide-react";
+import { Search, MapPin, Heart, ShoppingCart, Menu, Truck, ShieldCheck, Headphones, ChevronDown, Check, X, Phone, Home, Info, BadgeRussianRuble, RefreshCw, Shield } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { StoreStateProvider, useStoreState } from "./StoreState";
@@ -9,6 +9,7 @@ import { cities, products, type StoreProduct } from "./storeData";
 import StoreSearch from "./StoreSearch";
 import { confirmedStoreContacts } from "@/lib/store-contacts";
 import { ProductRevealProvider } from "./ProductRevealProvider";
+import { DesktopCatalogMegaMenu, MobileCatalogMenu } from "./CatalogMegaMenu";
 
 export { cities, products };
 
@@ -83,7 +84,7 @@ export function StoreHeader() {
     ["Гарантия", "/warranty", Shield],
     ["О компании", "/about", Info],
   ] as const;
-  return <><header className={`store-header layout-container${isScrolled ? " is-scrolled" : ""}`}><div className="header-main"><Link className="logo" href="/">iCenter</Link><Link className="catalog-btn" href="/catalog"><LayoutGrid size={18} />Каталог</Link><button type="button" className="store-mobile-menu-toggle" aria-label="Открыть меню" aria-expanded={mobileMenuOpen} aria-controls="store-mobile-menu" onClick={() => { setCityMenuOpen(false); setMobileMenuOpen(true); }}><Menu size={21} /></button><StoreSearch /></div><div className="header-quick-actions">
+  return <><header className={`store-header layout-container${isScrolled ? " is-scrolled" : ""}`}><div className="header-main"><Link className="logo" href="/">iCenter</Link><DesktopCatalogMegaMenu /><button type="button" className="store-mobile-menu-toggle" aria-label="Открыть меню" aria-expanded={mobileMenuOpen} aria-controls="store-mobile-menu" onClick={() => { setCityMenuOpen(false); setMobileMenuOpen(true); }}><Menu size={21} /></button><StoreSearch /></div><div className="header-quick-actions">
     <div className="city-menu-anchor" ref={cityMenuRef}>
       <button ref={cityButtonRef} type="button" className="header-action city-action" aria-label={`Город: ${selectedCityName}`} aria-haspopup="dialog" aria-expanded={cityMenuOpen} aria-controls="city-picker-popover" onClick={() => setCityMenuOpen((open) => !open)}><MapPin size={19} /><span className="city-action-name">{selectedCityName}</span><ChevronDown size={15} /></button>
       {cityMenuOpen && <div className="city-picker-popover" id="city-picker-popover" role="dialog" aria-label="Выберите город"><div className="city-picker-heading"><strong>Выберите город</strong><button type="button" aria-label="Закрыть выбор города" onClick={() => { setCityMenuOpen(false); cityButtonRef.current?.focus(); }}><X size={17} /></button></div><div className="city-picker-list">{cities.map((item) => <button type="button" key={item.slug} className={item.slug === city ? "selected" : ""} aria-pressed={item.slug === city} onClick={() => selectCity(item.slug)}><MapPin size={17} /><span>{item.name}</span>{item.slug === city && <Check size={17} />}</button>)}</div></div>}
@@ -95,7 +96,7 @@ export function StoreHeader() {
     <aside id="store-mobile-menu" className="store-mobile-menu open">
       <div className="store-mobile-menu-head"><strong>Меню</strong><button type="button" aria-label="Закрыть меню" onClick={() => setMobileMenuOpen(false)}><X size={20} /></button></div>
       <nav aria-label="Основное меню">{menuLinks.map(([label, href, Icon]) => <Link key={href} href={href} className={pathname === href ? "active" : ""} onClick={() => setMobileMenuOpen(false)}><Icon size={19} /><span>{label}</span>{href === "/favorites" && favorites.length > 0 && <b>{favorites.length}</b>}{href === "/cart" && cartCount > 0 && <b>{cartCount}</b>}</Link>)}</nav>
-      <Link className="store-mobile-menu-catalog" href="/catalog" onClick={() => setMobileMenuOpen(false)}><LayoutGrid size={19} />Открыть каталог</Link>
+      <MobileCatalogMenu close={() => setMobileMenuOpen(false)} />
     </aside></>}
   </>;
 }
@@ -125,7 +126,7 @@ export function StoreFooter() {
         </div>
       </div>
       <p className="footer-minimal-legal">Информация о товарах и ценах носит справочный характер. iCenter не является официальным сайтом Apple Inc. или других производителей. Все товарные знаки принадлежат их правообладателям.</p>
-      <div className="footer-minimal-bottom"><span>© 2026 iCenter</span><nav aria-label="Юридические документы"><Link href="/privacy">Политика конфиденциальности</Link><Link href="/personal-data-consent">Согласие на обработку данных</Link></nav></div>
+      <div className="footer-minimal-bottom"><span>© 2026 iCenter</span><span className="footer-legal-note">Информация на сайте не является публичной офертой.</span><nav aria-label="Юридические документы"><Link href="/privacy">Политика конфиденциальности</Link><Link href="/personal-data-consent">Согласие на обработку данных</Link></nav></div>
     </div>
   </footer>;
 }

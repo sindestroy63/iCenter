@@ -6,13 +6,11 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
 } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
-  Check,
   Percent,
   Repeat2,
   ShieldCheck,
@@ -22,53 +20,29 @@ import {
 import {
   safeDescription,
   type CatalogProductDto,
+  type CatalogVariantDto,
+  variantAttribute,
 } from "@/components/catalogClient";
 import CatalogProductCard from "@/components/CatalogProductCard";
 import BannerVideo from "@/components/BannerVideo";
+import LeadRequestForm from "@/components/LeadRequestForm";
 
 type ProductDetails = CatalogProductDto & { relatedProductIds?: string[] };
 type TradeInBanner = { mediaUrl: string | null; mediaType: string | null; isActive: boolean };
-type LeadForm = {
-  name: string;
-  phone: string;
-  device: string;
-  condition: string;
-  comment: string;
-  consent: boolean;
-};
-const blankForm: LeadForm = {
-  name: "",
-  phone: "",
-  device: "",
-  condition: "",
-  comment: "",
-  consent: false,
-};
-const conditions = [
-  "Отличное",
-  "Хорошее",
-  "Есть заметные следы использования",
-  "Не включается или повреждено",
-];
-
 export default function ProductDetailsLower({
   product,
   city,
+  selectedVariant,
 }: {
   product: ProductDetails;
   city: string;
+  selectedVariant: CatalogVariantDto | null;
 }) {
   const [banner, setBanner] = useState<TradeInBanner | null>(null);
   const [bannerFailed, setBannerFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
   const [tradeInOpen, setTradeInOpen] = useState(false);
-  const [lead, setLead] = useState<LeadForm>(blankForm);
-  const [leadKey, setLeadKey] = useState("");
-  const [sending, setSending] = useState(false);
-  const [leadResult, setLeadResult] = useState<"success" | "error" | null>(
-    null,
-  );
   const [related, setRelated] = useState<CatalogProductDto[]>([]);
   const [carouselAtStart, setCarouselAtStart] = useState(true);
   const [carouselAtEnd, setCarouselAtEnd] = useState(false);
@@ -168,52 +142,17 @@ export default function ProductDetailsLower({
   }, [related.length, updateCarousel]);
 
   function openTradeIn() {
-    setLead(blankForm);
-    setLeadKey(
-      globalThis.crypto?.randomUUID?.() ??
-        `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    setLeadResult(null);
     setTradeInOpen(true);
   }
 
   useEffect(() => {
     if (!tradeInOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !sending) setTradeInOpen(false);
+      if (event.key === "Escape") setTradeInOpen(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [sending, tradeInOpen]);
-
-  async function submitLead(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (sending || !lead.consent) return;
-    setSending(true);
-    setLeadResult(null);
-    try {
-      const response = await fetch("/api/trade-in", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "idempotency-key": leadKey,
-        },
-        body: JSON.stringify({
-          ...lead,
-          city,
-          productId: product.id,
-          productSlug: product.slug,
-          consent: lead.consent,
-        }),
-      });
-      if (!response.ok) throw new Error("TRADE_IN_FAILED");
-      setLeadResult("success");
-    } catch {
-      setLeadResult("error");
-    } finally {
-      setSending(false);
-    }
-  }
+  }, [tradeInOpen]);
 
   function scrollCarousel(direction: -1 | 1) {
     const element = carouselRef.current;
@@ -366,8 +305,7 @@ export default function ProductDetailsLower({
           className="trade-in-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !sending)
-              setTradeInOpen(false);
+            if (event.target === event.currentTarget) setTradeInOpen(false);
           }}
         >
           <section
@@ -389,120 +327,17 @@ export default function ProductDetailsLower({
               <button
                 type="button"
                 aria-label="Закрыть"
-                disabled={sending}
                 onClick={() => setTradeInOpen(false)}
               >
                 <X size={19} />
               </button>
             </header>
-            {leadResult === "success" ? (
-              <div className="trade-in-success" role="status">
-                <span>
-                  <Check size={22} />
-                </span>
-                <h3>Заявка отправлена</h3>
-                <p>Мы свяжемся с вами после оценки устройства.</p>
-                <button type="button" onClick={() => setTradeInOpen(false)}>
-                  Закрыть
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={(event) => void submitLead(event)}>
-                <label>
-                  Имя <sup>*</sup>
-                  <input
-                    autoFocus
-                    required
-                    maxLength={120}
-                    value={lead.name}
-                    onChange={(event) =>
-                      setLead({ ...lead, name: event.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  Телефон <sup>*</sup>
-                  <input
-                    type="tel"
-                    required
-                    autoComplete="tel"
-                    maxLength={40}
-                    value={lead.phone}
-                    onChange={(event) =>
-                      setLead({ ...lead, phone: event.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  Устройство для обмена <sup>*</sup>
-                  <input
-                    required
-                    maxLength={180}
-                    value={lead.device}
-                    onChange={(event) =>
-                      setLead({ ...lead, device: event.target.value })
-                    }
-                  />
-                </label>
-                <label>
-                  Состояние устройства
-                  <select
-                    value={lead.condition}
-                    onChange={(event) =>
-                      setLead({ ...lead, condition: event.target.value })
-                    }
-                  >
-                    <option value="">Не выбрано</option>
-                    {conditions.map((condition) => (
-                      <option key={condition} value={condition}>
-                        {condition}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Комментарий
-                  <textarea
-                    rows={3}
-                    maxLength={1000}
-                    value={lead.comment}
-                    onChange={(event) =>
-                      setLead({ ...lead, comment: event.target.value })
-                    }
-                  />
-                </label>
-                <label className="trade-in-consent">
-                  <input
-                    type="checkbox"
-                    required
-                    checked={lead.consent}
-                    onChange={(event) =>
-                      setLead({ ...lead, consent: event.target.checked })
-                    }
-                  />
-                  <span>
-                    Согласен на обработку персональных данных согласно{" "}
-                    <Link href="/personal-data-consent" target="_blank">
-                      политике обработки
-                    </Link>
-                    .
-                  </span>
-                </label>
-                {leadResult === "error" && (
-                  <p className="trade-in-error" role="alert">
-                    Не удалось отправить заявку. Проверьте соединение и
-                    повторите попытку.
-                  </p>
-                )}
-                <button
-                  className="trade-in-submit"
-                  type="submit"
-                  disabled={sending || !lead.consent}
-                >
-                  {sending ? "Отправляем…" : "Отправить заявку"}
-                </button>
-              </form>
-            )}
+            <LeadRequestForm
+              mode="trade_in"
+              compact
+              productId={product.id}
+              productSlug={product.slug}
+            />
           </section>
         </div>
       )}

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, Check, ChevronRight, Gamepad2, Grid2X2, Heart, House, Laptop, Minus, PackageOpen, Plus, ShoppingCart, Smartphone, Tablet } from "lucide-react";
 import { formatCartVariantDetails, useStoreState } from "./StoreState";
 import ProductDetailsLower from "./ProductDetailsLower";
@@ -10,6 +11,8 @@ import { compareMemoryValues } from "@/lib/product-dictionaries";
 import { catalogColorDetails, catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
 import ColorName from "./ColorName";
 import { useProductReveal } from "./ProductRevealProvider";
+import ProductPriceNotice from "./ProductPriceNotice";
+import { tradeInProductDetails } from "@/lib/trade-in-product";
 
 function canonicalAttributeKey(key: string) { return key === "memory" ? "storage" : key === "sim" ? "simType" : key; }
 function productVariantAttribute(variant: CatalogVariantDto, key: string) {
@@ -24,6 +27,7 @@ function availabilityText(value: CatalogVariantDto["availability"]) { return val
 const categoryIcons = { smartphones: Smartphone, tablets: Tablet, laptops: Laptop, appliances: House, consoles: Gamepad2 };
 
 export default function ProductView({ slug, initialVariantId = "" }: { slug: string; initialVariantId?: string }) {
+  const router = useRouter();
   const { city, addToCart, toggleFavorite, isFavorite } = useStoreState();
   const { isTarget } = useProductReveal();
   const [product, setProduct] = useState<CatalogProductDto | null>(null);
@@ -37,12 +41,12 @@ export default function ProductView({ slug, initialVariantId = "" }: { slug: str
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError(false); setProduct(null); setSelection(""); setImage(0); setFailedImages(new Set());
     fetch(`/api/catalog/products/${encodeURIComponent(slug)}?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" })
-      .then(async (r) => { if (!r.ok) throw new Error("Product not found"); return r.json() as Promise<{ data: CatalogProductDto }>; })
-      .then((body) => { if (!body.data?.variants) throw new Error("Invalid product response"); setProduct(body.data); setSelection(body.data.variants.some((variant) => variant.id === initialVariantId) ? initialVariantId : body.data.variants[0]?.id ?? ""); })
+      .then(async (r) => { if (!r.ok) throw new Error("Product not found"); return r.json() as Promise<{ data: CatalogProductDto; canonicalSlug?: string }>; })
+      .then((body) => { if (!body.data?.variants) throw new Error("Invalid product response"); setProduct(body.data); setSelection(body.data.variants.some((variant) => variant.id === initialVariantId) ? initialVariantId : body.data.variants[0]?.id ?? ""); if (body.canonicalSlug && body.canonicalSlug !== slug) router.replace(`/product/${encodeURIComponent(body.canonicalSlug)}${window.location.search}`, { scroll: false }); })
       .catch((cause: unknown) => { if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(true); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [slug, city, initialVariantId]);
+  }, [slug, city, initialVariantId, router]);
   useEffect(() => {
     if (!loading && isTarget(slug, initialVariantId)) window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [initialVariantId, isTarget, loading, slug]);
@@ -98,11 +102,13 @@ export default function ProductView({ slug, initialVariantId = "" }: { slug: str
   };
   const valueAvailable = (key: string, value: string) => variants.some((candidate) => productVariantAttribute(candidate, key) === value);
   const colorAvailable = (colorId: string) => variants.some((candidate) => candidate.color?.id === colorId);
-  const add = () => { if (!product || !selectedVariant) return; const fallbackLabel = product.brand.slug === "dyson" && !selectedVariant.color ? null : selectedVariant.label; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, fallbackLabel), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
+  const canPurchase = Boolean(selectedVariant && selectedVariant.price !== null && ["IN_STOCK", "PREORDER"].includes(selectedVariant.availability));
+  const add = () => { if (!product || !selectedVariant || !canPurchase) return; const fallbackLabel = product.brand.slug === "dyson" && !selectedVariant.color ? null : selectedVariant.label; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, fallbackLabel), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
 
   if (loading) return <div className="layout-container loading-state">Загрузка товара…</div>;
   if (error || !product) return <div className="layout-container empty-state product-not-found"><h1>{error ? "Не удалось загрузить товар" : "Товар не найден"}</h1><p>{error ? "Проверьте соединение и повторите попытку." : "Опубликованный товар недоступен для выбранного города."}</p><Link href="/catalog">Вернуться в каталог</Link></div>;
   const CategoryIcon = categoryIcons[product.category.slug as keyof typeof categoryIcons] ?? Grid2X2;
+  const usedDetails = tradeInProductDetails(product.specifications);
   return <div className={`product-page layout-container${isTarget(slug, initialVariantId) ? " is-cinematic-arrival" : ""}`}>
     <div className="product-layout">
       <section className="product-gallery" aria-label="Фотографии товара">
@@ -123,20 +129,21 @@ export default function ProductView({ slug, initialVariantId = "" }: { slug: str
           <Link className="product-category-badge" href={`/catalog?category=${encodeURIComponent(product.category.slug)}`}><CategoryIcon size={16} aria-hidden="true" /><span>{product.category.name}</span><ChevronRight size={15} className="category-badge-arrow" aria-hidden="true" /></Link>
           <button type="button" className={`product-favorite ${favorite ? "active" : ""}`} onClick={() => toggleFavorite(slug)} aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite}><Heart fill={favorite ? "currentColor" : "none"} /></button>
         </div>
-        <h1>{product.name}</h1>
+        <div className="product-heading-line"><h1>{product.name}</h1>{usedDetails.isUsed&&<span className="product-used-badge">Б/у</span>}</div>
+        {usedDetails.isUsed&&<div className="product-used-details">{usedDetails.condition&&<span>Состояние: {usedDetails.condition}</span>}{usedDetails.batteryHealth!==null&&<span>Аккумулятор: {usedDetails.batteryHealth}%</span>}{usedDetails.equipment&&<span>Комплект: {usedDetails.equipment}</span>}{usedDetails.defects&&<span>Особенности: {usedDetails.defects}</span>}</div>}
         <div className="availability"><span className={`availability-dot availability-dot-${selectedVariant?.availability?.toLowerCase() ?? "unspecified"}`} aria-hidden="true" />{selectedVariant ? availabilityText(selectedVariant.availability) : "Нет доступных вариантов"}</div>
         <hr className="product-divider product-availability-divider" />
         <div className="product-price">{formatPrice(selectedVariant?.price ?? null)}</div>
-        <p className="price-note">Цена и наличие указаны для выбранного города и варианта.</p>
+        <ProductPriceNotice brand={product.brand} />
         <hr className="product-divider" />
         <div className="product-options">
           {selectedVariant?.color && <fieldset className="product-color-fieldset"><legend><span>Цвет</span><ColorName color={selectedVariant.color} /></legend><div className="color-options">{Array.from(new Map(variants.filter((v) => v.color).map((v) => [v.color!.id, v.color!])).values()).map((color) => { const hex=catalogColorHex(color); const label=catalogColorLabel(color); return <button key={color.id} type="button" className={`${selectedVariant.color?.id === color.id ? "selected" : ""}${hex ? "" : " neutral-color"}`} style={hex ? { background: hex } : undefined} onClick={() => setVariantColor(color.id)} disabled={!colorAvailable(color.id)} aria-label={label} title={label} aria-pressed={selectedVariant.color?.id === color.id} />; })}</div></fieldset>}
           {attrs.map((key) => { const values = Array.from(new Set(variants.map((v) => productVariantAttribute(v, key)).filter(Boolean))).sort(key === "storage" ? compareMemoryValues : undefined); if (!values.length) return null; const selectedValue = productVariantAttribute(selectedVariant!, key); const label = key === "storage" ? "Объём памяти" : key === "simType" ? "SIM-карта" : key === "ram" ? "Оперативная память" : key === "connectivity" ? "Подключение" : key === "size" ? "Размер" : key === "material" ? "Материал" : key; return <fieldset key={key}><legend>{label}: <b>{selectedValue || "Не указано"}</b></legend><div className="option-grid">{values.map((value) => <button key={value} type="button" className={selectedValue === value ? "selected" : ""} onClick={() => setVariantAttribute(key, value)} disabled={!valueAvailable(key, value)} aria-pressed={selectedValue === value}>{value}</button>)}</div></fieldset>; })}
         </div>
         <hr className="product-divider product-options-divider" />
-        {selectedVariant ? <div className="product-purchase-actions"><div className="product-quantity"><span>Количество</span><div><button type="button" onClick={() => setQuantity((v) => Math.max(1, v - 1))} aria-label="Уменьшить количество"><Minus size={16} /></button><b>{quantity}</b><button type="button" onClick={() => setQuantity((v) => v + 1)} aria-label="Увеличить количество"><Plus size={16} /></button></div></div><button type="button" className={`add-cart${added ? " added" : ""}`} onClick={add}>{added ? <Check size={20} /> : <ShoppingCart size={20} />}{added ? "Добавлено в корзину" : "Добавить в корзину"}</button></div> : <p className="variant-unavailable">Этот вариант недоступен в выбранном городе.</p>}
+        {selectedVariant ? <div className="product-purchase-actions"><div className="product-quantity"><span>Количество</span><div><button type="button" onClick={() => setQuantity((v) => Math.max(1, v - 1))} aria-label="Уменьшить количество"><Minus size={16} /></button><b>{quantity}</b><button type="button" onClick={() => setQuantity((v) => v + 1)} aria-label="Увеличить количество"><Plus size={16} /></button></div></div><button type="button" className={`add-cart${added ? " added" : ""}`} disabled={!canPurchase} onClick={add}>{added ? <Check size={20} /> : <ShoppingCart size={20} />}{added ? "Добавлено в корзину" : canPurchase ? "Добавить в корзину" : "Недоступно для покупки"}</button></div> : <p className="variant-unavailable">Этот вариант недоступен в выбранном городе.</p>}
       </section>
     </div>
-    <ProductDetailsLower product={product} city={city} />
+    <ProductDetailsLower product={product} city={city} selectedVariant={selectedVariant} />
   </div>;
 }

@@ -5,6 +5,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { decryptPii, encryptPii, requestHash } from "@/lib/request-pii";
 import { notifyRequest } from "@/lib/telegram-requests";
+import { dualConsentEvidence, PERSONAL_DATA_CONSENT_VERSION, type ConsentEvidence } from "@/lib/consent-evidence";
 
 declare global { var requestPrisma: PrismaClient | undefined; }
 
@@ -18,6 +19,8 @@ const requestSchema = z.object({
   address: z.string().trim().max(300).optional().default(""),
   comment: z.string().trim().max(2000).optional().default(""),
   consent: z.literal(true),
+  personalDataConsent: z.literal(true),
+  privacyConsent: z.literal(true),
   items: z.array(z.object({ variantId: z.string().min(1).max(120), quantity: z.number().int().min(1).max(25) })).min(1).max(30),
 }).superRefine((data, ctx) => {
   if (data.fulfillment === "delivery" && !data.address) ctx.addIssue({ code: "custom", path: ["address"], message: "required" });
@@ -27,7 +30,7 @@ const requestSchema = z.object({
 });
 
 type Db = Prisma.TransactionClient;
-type Pii = { name: string; phone: string; address: string; comment: string };
+type Pii = { name: string; phone: string; address: string; comment: string; consentEvidence?: ConsentEvidence };
 type RequestLine = { variantId: string; quantity: number; productName: string; sku: string; label: string; attributes: unknown; price: string | null; availability: string; allowPreorder: boolean };
 
 function db() {
@@ -86,11 +89,11 @@ export async function createRequest(input: RequestInput, idempotencyKey: string)
       }, 0);
       const requestNumber = `IC-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomBytes(4).toString("hex").toUpperCase()}`;
       const id = `c${randomBytes(12).toString("hex")}`;
-      const pii: Pii = { name: input.name.trim(), phone: input.phone.trim(), address: input.address.trim(), comment: input.comment.trim() };
+      const pii: Pii = { name: input.name.trim(), phone: input.phone.trim(), address: input.address.trim(), comment: input.comment.trim(), consentEvidence: dualConsentEvidence() };
       const encrypted = encryptPii(pii);
       await tx.$executeRaw`
         INSERT INTO orders (id,"customerName","customerPhone","customerEmail",city,"cityId","deliveryType","deliveryAddress",comment,status,source,"totalAmount","encryptedPiiPayload","consentAt","consentVersion","contactMethod","createdAt","updatedAt")
-        VALUES (${id},NULL,NULL,NULL,${city.name},${city.id},${input.fulfillment === "delivery" ? "DELIVERY" : "PICKUP"}::"DeliveryType",NULL,NULL,'NEW'::"OrderStatus",'WEB'::"OrderSource",${total},${encrypted},NOW(),'personal-data-v2',${input.contactMethod},NOW(),NOW())
+        VALUES (${id},NULL,NULL,NULL,${city.name},${city.id},${input.fulfillment === "delivery" ? "DELIVERY" : "PICKUP"}::"DeliveryType",NULL,NULL,'NEW'::"OrderStatus",'WEB'::"OrderSource",${total},${encrypted},NOW(),${PERSONAL_DATA_CONSENT_VERSION},${input.contactMethod},NOW(),NOW())
       `;
       for (const item of input.items) {
         const line = lineById.get(item.variantId)!;

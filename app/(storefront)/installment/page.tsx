@@ -1,5 +1,5 @@
-import StoreInfoPage from "@/components/StoreInfoPage";
+import InstallmentPage from "@/components/InstallmentPage";
 
 export default function Page() {
-  return <StoreInfoPage slug="installment" />;
+  return <InstallmentPage />;
 }

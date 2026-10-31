@@ -22,6 +22,7 @@ export type CatalogProductDto = {
   description: unknown;
   specifications?: unknown;
   isNew: boolean;
+  isUsed?: boolean;
   brand: { id: string; name: string; slug: string };
   type: { id: string; name: string; slug: string; attributes?: unknown };
   category: { id: string; name: string; slug: string; parentId?: string | null };

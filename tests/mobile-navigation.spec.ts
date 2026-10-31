@@ -11,7 +11,13 @@ for (const width of [320, 375, 390, 430]) {
     await menuButton.click();
     await expect(menuButton).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByRole("navigation", { name: "Основное меню" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Открыть каталог" })).toBeVisible();
+    await expect(page.locator("#store-mobile-menu").getByText("Каталог", { exact: true })).toBeVisible();
+    const appleToggle = page.getByRole("button", { name: "Подразделы Apple" });
+    await appleToggle.click();
+    await expect(appleToggle).toHaveAttribute("aria-expanded", "true");
+    const appleMenu = page.getByRole("navigation", { name: "Подразделы Apple" });
+    await expect(appleMenu.getByRole("link", { name: "iPhone" })).toHaveAttribute("href", /menuItem=apple-iphone/);
+    await expect(appleMenu.locator('span[aria-disabled="true"]').filter({ hasText: "MacBook" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => document.body.style.overflow)).toBe("hidden");
 
     await page.keyboard.press("Escape");
@@ -27,6 +33,23 @@ for (const width of [320, 375, 390, 430]) {
     await expect(filters).not.toHaveClass(/filters-open/);
   });
 }
+
+test("desktop catalog mega-menu opens by hover and supports Escape", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.locator(".catalog-btn").hover();
+  const menu = page.getByRole("menu", { name: "Каталог товаров" });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Apple" })).toHaveAttribute("href", /menuItem=apple/);
+  await expect(menu.getByRole("menuitem", { name: "iPhone" })).toHaveAttribute("href", /menuItem=apple-iphone/);
+  await expect(menu.getByRole("menuitem", { name: /MacBook/ })).toHaveAttribute("aria-disabled", "true");
+  await menu.getByRole("menuitem", { name: "Консоли" }).hover();
+  await expect(menu.getByRole("menuitem", { name: "Sony PlayStation" })).toHaveAttribute("href", /menuItem=consoles-playstation/);
+  await expect(menu.getByRole("menuitem", { name: /Nintendo Switch/ })).toHaveAttribute("aria-disabled", "true");
+  await expect(menu.getByRole("menuitem", { name: "Trade-in" })).toHaveAttribute("href", /menuItem=trade-in/);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+});
 
 test("mobile hero uses playable CMS video", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

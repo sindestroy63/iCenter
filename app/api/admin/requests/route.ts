@@ -10,7 +10,9 @@ export async function GET(request: Request) {
     const session = await requireRequestSession();
     const viewer = { userId: session.userId, role: session.role };
     const type = new URL(request.url).searchParams.get("type");
-    const data = type === "trade_in" ? await listTradeInLeads(viewer) : type === "installment" ? [] : await listRequests(viewer);
+    const data = type === "trade_in" || type === "installment"
+      ? (await listTradeInLeads(viewer)).filter((row) => row.requestType === type)
+      : await listRequests(viewer);
     return NextResponse.json({ data }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const status = error instanceof RequestError ? error.status : error instanceof Error && error.message === "UNAUTHORIZED" ? 401 : error instanceof Error && error.message === "FORBIDDEN" ? 403 : 503;

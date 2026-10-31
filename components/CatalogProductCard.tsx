@@ -20,12 +20,13 @@ export default function CatalogProductCard({ product, city, variantId, compact =
   const image = product.images.find((entry) => entry.src === imageSrc);
   const productHref = `/product/${encodeURIComponent(product.slug)}${variant ? `?variant=${encodeURIComponent(variant.id)}` : ""}`;
   const specs = getCatalogCharacteristics(product, variant);
+  const canPurchase = Boolean(variant && selected.price !== null && ["IN_STOCK", "PREORDER"].includes(selected.availability));
   const revealProduct = (event: React.MouseEvent<HTMLAnchorElement>) => {
     if (!isPlainPrimaryClick(event)) return;
     beginReveal({ href: productHref });
   };
   const add = () => {
-    if (!variant || selected.price === null) return;
+    if (!variant || selected.price === null || !canPurchase) return;
     const fallbackLabel = product.brand.slug === "dyson" && !variant.color ? null : variant.label;
     addToCart({ productId: product.id, variantId: variant.id, slug: product.slug, name: product.name, image: imageSrc, details: formatCartVariantDetails(variant.color ? catalogColorDetails(variant.color) : null, variant.attributes, fallbackLabel), price: selected.price, priceCity: city, availability: selected.availability, city });
     setAdded(true);
@@ -42,6 +43,7 @@ export default function CatalogProductCard({ product, city, variantId, compact =
           <div className="product-tile-badges">
             <Link className="product-category-chip" href={`/catalog?category=${encodeURIComponent(product.category.slug)}`}><span>{product.category.name}</span><ChevronRight size={13} aria-hidden="true" /></Link>
             {product.isNew && <span className="product-new-chip">Новинка</span>}
+            {product.isUsed && <span className="product-used-chip">Б/у</span>}
           </div>
           <button className={`product-tile-favorite${favorite ? " active" : ""}`} type="button" aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite} onClick={() => toggleFavorite(product.slug)}><Heart size={19} fill={favorite ? "currentColor" : "none"} /></button>
         </div>
@@ -56,6 +58,6 @@ export default function CatalogProductCard({ product, city, variantId, compact =
       </Link>
     </div>
     <div className={`product-tile-availability is-${selected.availability.toLowerCase()}`}><i aria-hidden="true" />{availabilityLabel(selected.availability)}</div>
-    <div className="product-tile-bottom"><strong>{selected.price === null ? "Уточняйте цену" : `${variantId ? "" : "от "}${selected.price.toLocaleString("ru-RU")} ₽`}</strong><button className={`product-tile-cart${added ? " added" : ""}`} type="button" disabled={!variant || selected.price === null || added} aria-label={variant && selected.price !== null ? `Добавить ${product.name} в корзину` : `${product.name}: ${availabilityLabel(selected.availability).toLocaleLowerCase("ru-RU")}`} title={variant && selected.price !== null ? "Добавить выбранный вариант в корзину" : availabilityLabel(selected.availability)} onClick={add}>{added ? <Check size={19} /> : <ShoppingCart size={18} />}</button></div>
+    <div className="product-tile-bottom"><strong>{selected.price === null ? "Уточняйте цену" : `${variantId ? "" : "от "}${selected.price.toLocaleString("ru-RU")} ₽`}</strong><button className={`product-tile-cart${added ? " added" : ""}`} type="button" disabled={!canPurchase || added} aria-label={canPurchase ? `Добавить ${product.name} в корзину` : `${product.name}: ${availabilityLabel(selected.availability).toLocaleLowerCase("ru-RU")}`} title={canPurchase ? "Добавить выбранный вариант в корзину" : availabilityLabel(selected.availability)} onClick={add}>{added ? <Check size={19} /> : <ShoppingCart size={18} />}</button></div>
   </article>;
 }

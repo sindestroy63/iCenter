@@ -8,7 +8,7 @@ async function check(name, method, path, options = {}, expected) {
   return response;
 }
 
-await check("admin unauthenticated redirect", "GET", "/admin", {}, r => r.status === 307 && r.headers.get("location")?.endsWith("/admin/login"));
+await check("admin unauthenticated redirect", "GET", "/admin", {}, r => r.status === 307 && new URL(r.headers.get("location") ?? "", base).pathname === "/admin/login");
 await check("login page public", "GET", "/admin/login", {}, r => r.status === 200);
 await check("session denied without cookie", "GET", "/api/auth/session", {}, r => r.status === 401);
 await check("login origin required", "POST", "/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, r => r.status === 403);

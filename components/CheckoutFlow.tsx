@@ -7,6 +7,7 @@ import { ArrowRight, Check, Minus, Plus, ShoppingBag, Trash2, Truck, MapPin, Pho
 import { useStoreState, type StoreCartItem } from "./StoreState";
 import { cities } from "./storeData";
 import { cartPriceSummary } from "@/lib/cart-pricing";
+import ConsentFields, { type ConsentState } from "@/components/ConsentFields";
 
 function formatRussianPhone(value: string): string {
   const raw = value.trim();
@@ -60,7 +61,7 @@ export function CheckoutView() {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [comment, setComment] = useState("");
-  const [consent, setConsent] = useState(false);
+  const [consents, setConsents] = useState<ConsentState>({ personalDataConsent: false, privacyConsent: false });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const cityName = cities.find((item) => item.slug === city)?.name ?? city;
@@ -69,8 +70,8 @@ export function CheckoutView() {
     if (submitting) return;
     if (!cart.length) { setError("Добавьте хотя бы один товар в корзину."); return; }
     const phoneDigits = phone.replace(/\D/g, "");
-    if (!name.trim() || phoneDigits.length !== 11 || !phoneDigits.startsWith("7") || !consent || (receive === "delivery" && !address.trim())) {
-      setError(receive === "delivery" && !address.trim() ? "Укажите адрес доставки." : "Заполните имя, корректный телефон и подтвердите согласие.");
+    if (!name.trim() || phoneDigits.length !== 11 || !phoneDigits.startsWith("7") || !consents.personalDataConsent || !consents.privacyConsent || (receive === "delivery" && !address.trim())) {
+      setError(receive === "delivery" && !address.trim() ? "Укажите адрес доставки." : "Заполните имя, корректный телефон и подтвердите оба согласия.");
       return;
     }
     setSubmitting(true);
@@ -81,7 +82,7 @@ export function CheckoutView() {
       const response = await fetch("/api/requests", {
         method: "POST",
         headers: { "content-type": "application/json", "idempotency-key": idempotencyKey },
-        body: JSON.stringify({ name, phone, city, contactMethod: contact, fulfillment: receive, address, comment, consent, items: cart.map((item) => ({ variantId: item.variantId, quantity: item.quantity })) }),
+        body: JSON.stringify({ name, phone, city, contactMethod: contact, fulfillment: receive, address, comment, consent: true, personalDataConsent: consents.personalDataConsent, privacyConsent: consents.privacyConsent, items: cart.map((item) => ({ variantId: item.variantId, quantity: item.quantity })) }),
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || typeof result.requestNumber !== "string") {
@@ -125,7 +126,7 @@ export function CheckoutView() {
         </div>{receive === "delivery" && <label className="delivery-address">Адрес доставки <sup>*</sup><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Город, улица, дом" /></label>}</section>
         <section className="form-section comment-section"><label>Комментарий к заявке <span>(необязательно)</span><textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Например: удобное время для звонка..." /></label></section>
       </main>
-      <aside className="checkout-aside"><Summary items={cart.map((item) => cartPricesCity === city && item.priceCity === city && (item.availability === "IN_STOCK" || item.availability === "PREORDER") ? item : { ...item, price: null })} checkout /><button className="confirm-button" type="submit" disabled={submitting}>{submitting ? "Сохраняем заявку…" : "Подтвердить заявку"} {!submitting && <ArrowRight size={18} />}</button><div><label className="consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>Даю согласие на обработку персональных данных для оформления заявки, связи со мной и организации получения или доставки товаров.</span></label><p className="demo-note">Ознакомьтесь с <Link href="/privacy">Политикой обработки персональных данных</Link> и <Link href="/personal-data-consent">Согласием на обработку персональных данных</Link>.</p></div>{error && <p className="form-error" role="alert">{error}</p>}</aside>
+      <aside className="checkout-aside"><Summary items={cart.map((item) => cartPricesCity === city && item.priceCity === city && (item.availability === "IN_STOCK" || item.availability === "PREORDER") ? item : { ...item, price: null })} checkout /><button className="confirm-button" type="submit" disabled={submitting}>{submitting ? "Сохраняем заявку…" : "Подтвердить заявку"} {!submitting && <ArrowRight size={18} />}</button><ConsentFields value={consents} onChange={setConsents} className="request-consents checkout-consents" />{error && <p className="form-error" role="alert">{error}</p>}</aside>
     </form>
   </div>;
 }
