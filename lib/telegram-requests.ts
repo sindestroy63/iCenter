@@ -4,6 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { decryptPii } from "@/lib/request-pii";
 import { deliverNotification, notificationMode, assertNotificationTestIsolation } from "@/lib/notification-transport";
 import { sendTelegramMessage } from "@/lib/telegram/client";
+import { formatOrderNotification } from "@/lib/telegram/formatters";
 
 type TelegramResponse = { ok: boolean; result?: { message_id?: number }; description?: string };
 type TelegramTransport = (token: string, chatId: string, text: string) => Promise<TelegramResponse>;
@@ -26,8 +27,6 @@ function db() {
   globalThis.telegramPrisma ??= new PrismaClient({ log: [] });
   return globalThis.telegramPrisma;
 }
-
-function money(value: number) { return `${value.toLocaleString("ru-RU")} ₽`; }
 
 export type TelegramSendResult = "sent" | "already-sent" | "not-configured" | "failed";
 
@@ -66,19 +65,18 @@ export async function notifyRequest(orderNumber: string, transport: TelegramTran
     return state[0]?.telegramMessageId ? "already-sent" : "failed";
   }
   const pii = decryptPii<{ name: string; phone: string; address: string; comment: string }>(rows[0].encryptedPiiPayload);
-  const lines = rows.map((row) => `- ${row.productNameSnapshot ?? row.skuSnapshot}${row.variantSnapshot ? ` / ${row.variantSnapshot}` : ""} × ${row.quantity} — ${money(Number(row.price))}`).join("\n");
-  const text = [
-    `Новая заявка ${orderNumber}`,
-    `Город: ${rows[0].city}`,
-    `Товары:\n${lines}`,
-    `Итого: ${money(Number(rows[0].totalAmount))}`,
-    `Клиент: ${pii.name}`,
-    `Телефон: ${pii.phone}`,
-    `Способ связи: ${rows[0].contactMethod}`,
-    `Получение: ${rows[0].deliveryType}`,
-    pii.address ? `Адрес: ${pii.address}` : "",
-    pii.comment ? `Комментарий: ${pii.comment}` : "",
-  ].filter(Boolean).join("\n");
+  const text = formatOrderNotification({
+    requestNumber: orderNumber,
+    city: rows[0].city,
+    name: pii.name,
+    phone: pii.phone,
+    contactMethod: rows[0].contactMethod,
+    fulfillment: rows[0].deliveryType,
+    address: pii.address,
+    comment: pii.comment,
+    total: Number(rows[0].totalAmount),
+    items: rows.map((row) => ({ productName: row.productNameSnapshot ?? row.skuSnapshot, variant: row.variantSnapshot, sku: row.skuSnapshot, quantity: row.quantity, unitPrice: Number(row.price) })),
+  });
   try {
     const result = await transport(token, chatId, text);
     if (!result.ok || result.result?.message_id == null) throw new Error(result.description ?? "Telegram rejected message");

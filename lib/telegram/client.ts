@@ -20,7 +20,7 @@ export async function sendTelegramMessage(text: string, options: TelegramClientO
     const response = await (options.fetcher ?? fetch)(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: text.slice(0, 4096) }),
+      body: JSON.stringify({ chat_id: chatId, text: text.slice(0, 4096), parse_mode: "HTML", disable_web_page_preview: true }),
       cache: "no-store",
       signal: controller.signal,
     });
