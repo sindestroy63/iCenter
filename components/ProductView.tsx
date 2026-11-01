@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Gamepad2, Grid2X2, Heart, House, Laptop, Minus, PackageOpen, Plus, ShoppingCart, Smartphone, Tablet } from "lucide-react";
+import { ArrowLeft, ArrowRight, BadgeRussianRuble, Check, ChevronRight, Gamepad2, Grid2X2, Heart, House, Laptop, Minus, PackageOpen, Plus, Repeat2, ShieldCheck, ShoppingCart, Smartphone, Tablet } from "lucide-react";
 import { formatCartVariantDetails, useStoreState } from "./StoreState";
 import ProductDetailsLower from "./ProductDetailsLower";
 import { productImage, variantAttribute, type CatalogProductDto, type CatalogVariantDto } from "./catalogClient";
@@ -64,7 +64,7 @@ export default function ProductView({ slug, initialVariantId = "" }: { slug: str
     setFailedImages((current) => new Set(current).add(id));
     setImage(0);
   };
-  const favorite = isFavorite(slug);
+  const favorite = isFavorite(selectedVariant?.id);
   const isIphone = product?.brand.slug === "apple" && product.category.slug === "smartphones";
   const attrs = Array.from(new Set(variants.flatMap((v) => Object.keys(v.attributes ?? {}).map(canonicalAttributeKey))))
     .filter((key) => !isIphone || ["storage", "simType"].includes(key));
@@ -121,13 +121,18 @@ export default function ProductView({ slug, initialVariantId = "" }: { slug: str
             {visibleImages[image]?.src ? <img key={visibleImages[image].id} className="gallery-main-photo" src={visibleImages[image].src!} alt={visibleImages[image].alt || product.name} onError={() => markImageFailed(visibleImages[image].id)} /> : <><PackageOpen size={58} aria-hidden="true" /><span>Фото скоро появится</span></>}
           </div>
           {visibleImages.length > 1 && <div className="gallery-dots" aria-label="Выбрать фотографию">{visibleImages.map((entry, index) => <button key={entry.id} type="button" className={index === image ? "active" : ""} aria-label={`Фото ${index + 1}`} aria-current={index === image ? "true" : undefined} onClick={() => setImage(index)} />)}</div>}
+          <nav className="product-gallery-promos" aria-label="Услуги iCenter">
+            <Link href="/trade-in" className="product-gallery-promo" aria-label="Trade-in"><Repeat2 aria-hidden="true" /><span>Trade-in</span></Link>
+            <Link href="/installment" className="product-gallery-promo" aria-label="Рассрочка"><BadgeRussianRuble aria-hidden="true" /><span>Рассрочка</span></Link>
+            <Link href="/warranty" className="product-gallery-promo" aria-label="Гарантия"><ShieldCheck aria-hidden="true" /><span>Гарантия</span></Link>
+          </nav>
         </div>
         <div className="product-thumbs" aria-label="Миниатюры фотографий">{visibleImages.map((entry, index) => <button key={entry.id} type="button" className={index === image ? "active" : ""} onClick={() => setImage(index)} aria-label={`Показать фото ${index + 1}`} aria-pressed={index === image}><img src={entry.src!} alt={entry.alt || `${product.name}, изображение ${index + 1}`} onError={() => markImageFailed(entry.id)} /></button>)}</div>
       </section>
       <section className="product-info" aria-label="Информация о товаре">
         <div className="product-title-row">
           <Link className="product-category-badge" href={`/catalog?category=${encodeURIComponent(product.category.slug)}`}><CategoryIcon size={16} aria-hidden="true" /><span>{product.category.name}</span><ChevronRight size={15} className="category-badge-arrow" aria-hidden="true" /></Link>
-          <button type="button" className={`product-favorite ${favorite ? "active" : ""}`} onClick={() => toggleFavorite(slug)} aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite}><Heart fill={favorite ? "currentColor" : "none"} /></button>
+          <button type="button" className={`product-favorite ${favorite ? "active" : ""}`} onClick={() => selectedVariant && toggleFavorite({ slug: product.slug, variantId: selectedVariant.id })} aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite}><Heart fill={favorite ? "currentColor" : "none"} /></button>
         </div>
         <div className="product-heading-line"><h1>{product.name}</h1>{usedDetails.isUsed&&<span className="product-used-badge">Б/у</span>}</div>
         {usedDetails.isUsed&&<div className="product-used-details">{usedDetails.condition&&<span>Состояние: {usedDetails.condition}</span>}{usedDetails.batteryHealth!==null&&<span>Аккумулятор: {usedDetails.batteryHealth}%</span>}{usedDetails.equipment&&<span>Комплект: {usedDetails.equipment}</span>}{usedDetails.defects&&<span>Особенности: {usedDetails.defects}</span>}</div>}

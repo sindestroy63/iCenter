@@ -12,6 +12,7 @@ import AdminDictionaries from "@/components/AdminDictionaries";
 import AdminMediaBackend from "@/components/AdminMediaBackend";
 import AdminCatalogMenuBanners from "@/components/AdminCatalogMenuBanners";
 import AdminCatalogMenu from "@/components/AdminCatalogMenu";
+import AdminProductGroupsBackend from "@/components/AdminProductGroupsBackend";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
@@ -44,6 +45,8 @@ export default async function AdminSection({ params }: { params: { slug: string[
       return <AdminBestOffersBackend />;
     case "popular-products":
       return <AdminPopularProductsBackend />;
+    case "product-groups":
+      return <AdminProductGroupsBackend />;
     case "settings":
       return <AdminSettingsBackend />;
     case "media":

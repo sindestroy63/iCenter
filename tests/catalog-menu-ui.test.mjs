@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+const admin = await readFile("components/AdminCatalogMenu.tsx", "utf8");
+const mega = await readFile("components/CatalogMegaMenu.tsx", "utf8");
+assert.doesNotMatch(admin, /catalog-menu-tree-add/);
+assert.match(admin, /catalog-menu-add-child/);
+assert.match(admin, /actionLabel/);
+assert.match(admin, /type: "group"/);
+assert.match(admin, /type: "filters"/);
+assert.doesNotMatch(admin, /Короткое описание/);
+assert.match(admin, /items\.map\(\(item\) => item\.id === id \? \{ \.\.\.item, \.\.\.update \}/);
+assert.match(admin, /depthOf\(config\.items, selected\.id\) < 2/);
+assert.match(admin, /catalog-menu-add-child/);
+assert.match(mega, /onMouseEnter/);
+assert.match(mega, /onKeyDown/);
+assert.match(mega, /Escape/);
+assert.match(mega, /MobileMenuCard/);
+assert.match(mega, /aria-expanded/);
+console.log("Passed catalog menu UI checks");

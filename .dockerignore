@@ -19,6 +19,7 @@ iCenter_2_0_APPROVED_ONLY
 *.backup
 *.zip
 *.tar
+*.tar.gz
 *.tgz
 backups
 backup
@@ -30,4 +31,5 @@ test-results
 tests
 scripts
 tmp-iphone18.png
+prisma/manual-catalog-group-city-variants.sql
 tsconfig.tsbuildinfo

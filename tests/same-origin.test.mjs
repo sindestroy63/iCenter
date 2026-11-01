@@ -32,7 +32,9 @@ try {
     process.env.NODE_ENV = "production";
     process.env.ICENTER_LOCAL_DEV = "1";
     assert.equal(sameOrigin(request("http://localhost:3022/api/admin/products", "http://localhost:3022")), true);
-    assert.equal(sameOrigin(request("http://127.0.0.1:3022/api/admin/products", "http://localhost:3022")), false);
+    assert.equal(sameOrigin(request("http://127.0.0.1:3012/api/auth/login", "http://127.0.0.1:3012")), true);
+    assert.equal(sameOrigin(request("http://localhost:3012/api/auth/login", "http://127.0.0.1:3012")), true);
+    assert.equal(sameOrigin(request("http://127.0.0.1:3022/api/admin/products", "http://localhost:3022")), true);
     assert.equal(sameOrigin(request("http://localhost:3022/api/admin/products", "https://attacker.example")), false);
   });
 

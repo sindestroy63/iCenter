@@ -1,7 +1,8 @@
-export type CatalogMenuRule = { field: "brand" | "type" | "category" | "tradeIn"; value: string | true };
+export type CatalogMenuRule = { field: "brand" | "type" | "category" | "model" | "tradeIn"; value: string | true };
 export type CatalogMenuAction =
   | { type: "url"; href: string }
   | { type: "category"; categoryId: string }
+  | { type: "group"; groupId: string }
   | { type: "filters"; rules: CatalogMenuRule[] };
 export type CatalogMenuBanner = { enabled: boolean; imageMediaId: string | null; alt: string; description: string };
 export type CatalogMenuNode = {
@@ -11,12 +12,22 @@ export type CatalogMenuNode = {
 export type CatalogMenuConfig = { version: 1; items: CatalogMenuNode[] };
 export type MenuTaxonomy = {
   brands: Array<{ id: string; slug: string; name: string }>;
-  types: Array<{ id: string; slug: string; name: string; brandId: string; brandSlug: string }>;
+  types: Array<{ id: string; slug: string; name: string; brandId: string; brandSlug: string; globalProductTypeId?: string }>;
+  models: Array<{ id: string; name: string; brandId: string; globalProductTypeId: string; brandName?: string; typeName?: string }>;
   categories: Array<{ id: string; slug: string; name: string; parentId: string | null }>;
+  groups?: Array<{ id: string; slug: string; title: string; isActive: boolean }>;
 };
 
 export const CATALOG_MENU_SETTING_KEY = "catalog.megaMenu";
 const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/;
+
+export function menuModelMatchesScope(model: MenuTaxonomy["models"][number], brandId?: string, globalProductTypeId?: string) {
+  return (!brandId || model.brandId === brandId) && (!globalProductTypeId || model.globalProductTypeId === globalProductTypeId);
+}
+
+export function filterMenuModels(models: MenuTaxonomy["models"], brandId?: string, globalProductTypeId?: string) {
+  return models.filter((model) => menuModelMatchesScope(model, brandId, globalProductTypeId));
+}
 
 export function isSafeInternalPath(path: string) {
   return path.startsWith("/") && !path.startsWith("//") && !path.includes("\\") && !/[\u0000-\u001f]/.test(path);
@@ -42,13 +53,14 @@ export function parseCatalogMenu(value: unknown): CatalogMenuConfig | null {
       const candidate = item.action as Record<string, unknown>;
       if (candidate.type === "url" && typeof candidate.href === "string" && isSafeInternalPath(candidate.href)) action = { type: "url", href: candidate.href };
       else if (candidate.type === "category" && typeof candidate.categoryId === "string" && candidate.categoryId.length <= 160) action = { type: "category", categoryId: candidate.categoryId };
+      else if (candidate.type === "group" && typeof candidate.groupId === "string" && candidate.groupId.length <= 160) action = { type: "group", groupId: candidate.groupId };
       else if (candidate.type === "filters" && Array.isArray(candidate.rules) && candidate.rules.length > 0 && candidate.rules.length <= 8) {
         const rules: CatalogMenuRule[] = [];
         for (const rawRule of candidate.rules) {
           if (!rawRule || typeof rawRule !== "object" || Array.isArray(rawRule)) return null;
           const rule = rawRule as Record<string, unknown>;
           if (rule.field === "tradeIn" && rule.value === true) rules.push({ field: "tradeIn", value: true });
-          else if (["brand", "type", "category"].includes(String(rule.field)) && typeof rule.value === "string" && rule.value.length > 0 && rule.value.length <= 160) rules.push({ field: rule.field as "brand" | "type" | "category", value: rule.value });
+          else if (["brand", "type", "category", "model"].includes(String(rule.field)) && typeof rule.value === "string" && rule.value.length > 0 && rule.value.length <= 160) rules.push({ field: rule.field as "brand" | "type" | "category" | "model", value: rule.value });
           else return null;
         }
         action = { type: "filters", rules };
@@ -66,10 +78,16 @@ export function parseCatalogMenu(value: unknown): CatalogMenuConfig | null {
   }
   const byId = new Map(items.map((item) => [item.id, item]));
   for (const item of items) {
-    if (item.parentId !== null) {
-      const parent = byId.get(item.parentId);
-      if (!parent || parent.parentId !== null) return null;
-      if (item.banner) return null;
+    if (item.parentId !== null && !byId.has(item.parentId)) return null;
+    if (item.parentId !== null && item.banner) return null;
+    const seen = new Set<string>();
+    let current: CatalogMenuNode | undefined = item;
+    let depth = 0;
+    while (current?.parentId !== null) {
+      if (seen.has(current.id) || depth++ >= 2) return null;
+      seen.add(current.id);
+      current = byId.get(current.parentId);
+      if (!current) return null;
     }
   }
   return { version: 1, items };

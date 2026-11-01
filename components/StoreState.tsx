@@ -28,6 +28,8 @@ export type StoreCityInfo = {
   socialLinks: unknown;
 };
 
+export type StoreFavorite = { slug: string; variantId: string | null };
+
 export function formatCartVariantDetails(colorName: string | null | undefined, attributes: Record<string, unknown> | undefined, fallbackLabel?: string | null): string {
   const normalized = new Map<string, string>();
   for (const [key, rawValue] of Object.entries(attributes ?? {})) {
@@ -46,9 +48,9 @@ type StoreStateValue = {
   cityInfo: StoreCityInfo | null;
   cartPricesCity: string | null;
   setCity: (city: string) => void;
-  favorites: string[];
-  toggleFavorite: (slug: string) => void;
-  isFavorite: (slug: string) => boolean;
+  favorites: StoreFavorite[];
+  toggleFavorite: (favorite: StoreFavorite) => void;
+  isFavorite: (variantId: string | null | undefined) => boolean;
   cart: StoreCartItem[];
   cartCount: number;
   addToCart: (item: Omit<StoreCartItem, "quantity">, quantity?: number) => void;
@@ -69,8 +71,16 @@ function readStorage<T>(key: string, fallback: T): T {
   }
 }
 
-function normalizeFavorites(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((slug): slug is string => typeof slug === "string" && slug.length > 0) : [];
+function normalizeFavorites(value: unknown): StoreFavorite[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string" && item.length > 0) return [{ slug: item, variantId: null }];
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as { slug?: unknown; variantId?: unknown };
+    return typeof candidate.slug === "string" && candidate.slug.length > 0
+      ? [{ slug: candidate.slug, variantId: typeof candidate.variantId === "string" && candidate.variantId.length > 0 ? candidate.variantId : null }]
+      : [];
+  });
 }
 
 function normalizeCart(value: unknown): StoreCartItem[] {
@@ -86,7 +96,7 @@ function normalizeCart(value: unknown): StoreCartItem[] {
 export function StoreStateProvider({ children }: { children: React.ReactNode }) {
   const [city, setCityState] = useState("samara");
   const [cityInfo, setCityInfo] = useState<StoreCityInfo | null>(null);
-  const [favorites, setFavorites] = useState<string[]>([]);
+  const [favorites, setFavorites] = useState<StoreFavorite[]>([]);
   const [cart, setCart] = useState<StoreCartItem[]>([]);
   const [cartPricesCity, setCartPricesCity] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -161,8 +171,14 @@ export function StoreStateProvider({ children }: { children: React.ReactNode }) 
     cartPricesCity,
     setCity: (nextCity) => setCityState(["samara", "moscow", "saint-petersburg", "orenburg"].includes(nextCity) ? nextCity : "samara"),
     favorites,
-    toggleFavorite: (slug) => setFavorites((current) => current.includes(slug) ? current.filter((item) => item !== slug) : [...current, slug]),
-    isFavorite: (slug) => favorites.includes(slug),
+    toggleFavorite: (favorite) => setFavorites((current) => {
+      if (!favorite.variantId) return current;
+      const exists = current.some((item) => item.variantId === favorite.variantId);
+      if (exists) return current.filter((item) => item.variantId !== favorite.variantId);
+      // A legacy slug-only entry is converted only for the explicitly chosen variant.
+      return [...current.filter((item) => item.slug !== favorite.slug || item.variantId !== null), favorite];
+    }),
+    isFavorite: (variantId) => Boolean(variantId && favorites.some((item) => item.variantId === variantId)),
     cart,
     cartCount: cart.reduce((sum, item) => sum + item.quantity, 0),
     addToCart: (item, quantity = 1) => {

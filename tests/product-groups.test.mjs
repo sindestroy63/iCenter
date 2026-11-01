@@ -1,0 +1,43 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const library = readFileSync(new URL("../lib/product-groups.ts", import.meta.url), "utf8");
+const route = readFileSync(new URL("../app/api/admin/product-groups/route.ts", import.meta.url), "utf8");
+const migration = readFileSync(new URL("../prisma/manual-catalog-groups.sql", import.meta.url), "utf8");
+const variantMigration = readFileSync(new URL("../prisma/manual-catalog-group-variants.sql", import.meta.url), "utf8");
+const cityVariantMigration = readFileSync(new URL("../prisma/manual-catalog-group-city-variants.sql", import.meta.url), "utf8");
+const schema = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
+
+assert.match(library, /RULE_CONDITION_REQUIRED/);
+assert.match(library, /MODEL_BRAND_MISMATCH/);
+assert.match(library, /MODEL_TYPE_MISMATCH/);
+assert.match(library, /legacy_product_type_mappings/);
+assert.match(library, /COUNT\(DISTINCT p\.id\)/);
+assert.match(route, /body\.kind === "group"/);
+assert.match(route, /body\.kind === "product"/);
+assert.match(route, /body\.kind === "rule"/);
+assert.match(migration, /catalog_group_rules_has_condition/);
+assert.match(migration, /catalog_group_rules_scope_unique/);
+assert.match(variantMigration, /CREATE TABLE catalog_group_variants/);
+assert.match(variantMigration, /"groupId" text NOT NULL REFERENCES catalog_groups\(id\) ON DELETE CASCADE/);
+assert.match(variantMigration, /"variantId" text NOT NULL REFERENCES product_variants\(id\) ON DELETE CASCADE/);
+assert.match(variantMigration, /PRIMARY KEY \("groupId", "variantId"\)/);
+assert.match(variantMigration, /catalog_group_variants_order_idx/);
+assert.match(variantMigration, /catalog_group_variants_variant_idx/);
+assert.match(cityVariantMigration, /Prepared only\. Do not apply without explicit approval/);
+assert.match(cityVariantMigration, /CREATE TABLE catalog_group_city_compositions/);
+assert.match(cityVariantMigration, /PRIMARY KEY \("groupId", "cityId"\)/);
+assert.match(cityVariantMigration, /CREATE TABLE catalog_group_city_variants/);
+assert.match(cityVariantMigration, /PRIMARY KEY \("groupId", "cityId", "variantId"\)/);
+assert.doesNotMatch(cityVariantMigration, /INSERT INTO|UPDATE |DELETE FROM/);
+assert.match(route, /kind === "variant" \|\| body.kind === "variants"/);
+assert.match(route, /PRODUCT_VARIANT_CONFLICT/);
+assert.match(route, /groupVariantSchemaRequired/);
+assert.match(library, /catalog_group_variants/);
+assert.match(schema, /model CatalogGroup \{/);
+assert.match(schema, /model CatalogGroupProduct \{/);
+assert.match(schema, /model CatalogGroupRule \{/);
+assert.match(schema, /@map\("isactive"\)/);
+assert.match(schema, /@map\("sortorder"\)/);
+
+console.log("Passed product group validation and schema checks");

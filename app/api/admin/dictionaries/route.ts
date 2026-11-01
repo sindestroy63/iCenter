@@ -8,8 +8,13 @@ import { catalogColorHex } from "@/lib/catalog-colors";
 export const dynamic = "force-dynamic";
 
 const optionSchema = z.object({ id: z.string().trim().min(1).max(100).optional(), canonicalKey: z.string().trim().min(1).max(120), label: z.string().trim().min(1).max(180), nameRu: z.string().trim().max(180).nullable().optional(), aliases: z.array(z.string().trim().min(1).max(180)).max(30).default([]), sortOrder: z.number().int().min(-100000).max(100000).default(0), isActive: z.boolean().default(true), brandId: z.string().trim().min(1).optional(), globalProductTypeId: z.string().trim().min(1).optional(), brandIds: z.array(z.string().trim().min(1)).max(100).default([]), hex: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional() });
+const definitionSchema = z.object({ id: z.string().trim().min(1).max(100).optional(), code: z.string().regex(/^[a-z][a-z0-9_]*$/), name: z.string().trim().min(1).max(180), scope: z.literal("VARIANT").default("VARIANT"), valueKind: z.literal("OPTION").default("OPTION"), sortOrder: z.number().int().min(-100000).max(100000).default(0), isFilterable: z.boolean().default(false), isActive: z.boolean().default(true), productTypeIds: z.array(z.string().trim().min(1)).min(1).max(100).default([]) });
 const legacyCodes = new Set<string>();
 const optionCodes = new Set(DICTIONARY_REGISTRY.filter((item) => item.source === "attribute_options").map((item) => item.code));
+const fixedDefinitionCodes = new Set(DICTIONARY_REGISTRY.map((item) => item.code));
+const reservedAttributeCodes = new Set(["memory", "ram", "sim", "simType", "storage", "color", "connectivity", "size", "material"]);
+
+function isFixedDictionary(code: string) { return fixedDefinitionCodes.has(code as DictionaryCode); }
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "DICTIONARY_FAILED";
@@ -23,7 +28,7 @@ function errorResponse(error: unknown) {
 }
 
 function labels(code: string, row: any) {
-  return { id: row.id, dictionary: code, canonicalKey: row.canonicalKey ?? `${code}:${row.slug ?? row.id}`, label: row.label ?? row.name, aliases: row.aliases ?? [], sortOrder: row.sortOrder ?? row.order ?? 0, isActive: row.isActive ?? true, brandId: row.brandId ?? null, globalProductTypeId: row.globalProductTypeId ?? null, nameEn: code === "color" ? row.name : undefined, nameRu: code === "color" ? row.nameRu ?? null : undefined, hex: code === "color" ? row.hexPrimary ?? catalogColorHex({ name: row.name, slug: row.slug }) : undefined };
+  return { id: row.id, dictionary: code, canonicalKey: row.canonicalKey ?? `${code}:${row.slug ?? row.id}`, label: row.label ?? row.name, aliases: row.aliases ?? [], sortOrder: row.sortOrder ?? row.order ?? 0, isActive: row.isActive ?? true, brandId: row.brandId ?? null, globalProductTypeId: row.globalProductTypeId ?? null, scope: row.scope ?? null, definitionName: row.definitionName ?? null, definitionIsActive: row.definitionIsActive ?? null, productTypeIds: row.productTypeIds ?? [], nameEn: code === "color" ? row.name : undefined, nameRu: code === "color" ? row.nameRu ?? null : undefined, hex: code === "color" ? row.hexPrimary ?? catalogColorHex({ name: row.name, slug: row.slug }) : undefined };
 }
 
 export async function GET(request: Request) {
@@ -33,17 +38,18 @@ export async function GET(request: Request) {
     const brandFilter = new URL(request.url).searchParams.get("brandId");
     const typeFilter = new URL(request.url).searchParams.get("globalProductTypeId");
     const activeFilter = new URL(request.url).searchParams.get("isActive");
-    if (code && !DICTIONARY_REGISTRY.some((item) => item.code === code)) return NextResponse.json({ error: "UNKNOWN_DICTIONARY" }, { status: 400 });
     const db = adminDb();
-    const [brands, types, colors, products, lines, options, globalTypes] = await Promise.all([
+    const [brands, types, colors, products, lines, options, globalTypes, definitions] = await Promise.all([
       db.$queryRaw<any[]>`SELECT id,name,slug,"sortOrder","isActive" FROM brands ORDER BY "sortOrder",name`,
       (!code || code === "productType") ? db.$queryRaw<any[]>`SELECT id,name,slug,"brandId","sortOrder","isActive" FROM product_types ORDER BY "sortOrder",name` : Promise.resolve([]),
       (!code || code === "color") ? db.$queryRaw<any[]>`SELECT id,name,to_jsonb(colors)->>'nameRu' AS "nameRu",slug,"hexPrimary","sortOrder","isActive" FROM colors ORDER BY "sortOrder",name` : Promise.resolve([]),
       (!code || code === "productModel") ? db.$queryRaw<any[]>`SELECT m.id,m.name,m."brandId",m."globalProductTypeId",m."isActive",m."createdAt" FROM product_models m WHERE (${brandFilter}::text IS NULL OR m."brandId"=${brandFilter}) AND (${typeFilter}::text IS NULL OR m."globalProductTypeId"=${typeFilter}) AND (${activeFilter}::text IS NULL OR m."isActive"=(${activeFilter}='true')) ORDER BY m.name` : Promise.resolve([]),
       (!code || code === "productLine") ? db.$queryRaw<any[]>`SELECT id,"brandId","canonicalKey",name,"sortOrder","isActive" FROM product_lines ORDER BY "sortOrder",name` : Promise.resolve([]),
-      (!code || optionCodes.has(code as DictionaryCode)) ? db.$queryRaw<any[]>`SELECT o.id,d.code AS dictionary,o."canonicalKey",o.label,o."sortOrder",o."isActive",COALESCE(json_agg(a."aliasLabel" ORDER BY a."aliasLabel") FILTER (WHERE a.id IS NOT NULL),'[]'::json) AS aliases FROM attribute_options o JOIN attribute_definitions d ON d.id=o."definitionId" LEFT JOIN attribute_option_aliases a ON a."optionId"=o.id GROUP BY o.id,d.code ORDER BY d.code,o."sortOrder",o.label` : Promise.resolve([]),
+      (!code || optionCodes.has(code as DictionaryCode) || await db.$queryRaw<any[]>`SELECT 1 FROM attribute_definitions WHERE code=${code} AND scope='VARIANT' LIMIT 1`.then((rows) => rows.length > 0)) ? db.$queryRaw<any[]>`SELECT o.id,d.code AS dictionary,o."canonicalKey",o.label,o."sortOrder",o."isActive",d.name AS "definitionName",d.scope,d."isActive" AS "definitionIsActive",COALESCE((SELECT json_agg(pta."productTypeId") FROM product_type_attributes pta WHERE pta."definitionId"=d.id AND pta.scope=d.scope),'[]'::json) AS "productTypeIds",COALESCE((SELECT json_agg(a."aliasLabel" ORDER BY a."aliasLabel") FROM attribute_option_aliases a WHERE a."optionId"=o.id),'[]'::json) AS aliases FROM attribute_options o JOIN attribute_definitions d ON d.id=o."definitionId" WHERE (${code}::text='' OR d.code=${code}) ORDER BY d.code,o."sortOrder",o.label` : Promise.resolve([]),
       (!code || code === "productType") ? db.$queryRaw<any[]>`SELECT t.id,t."canonicalKey",t.name,t."sortOrder",t."isActive",COALESCE(json_agg(b.id) FILTER (WHERE b.id IS NOT NULL),'[]'::json) AS "brandIds" FROM global_product_types t LEFT JOIN global_product_type_brands link ON link."productTypeId"=t.id LEFT JOIN brands b ON b.id=link."brandId" GROUP BY t.id ORDER BY t."sortOrder",t.name` : Promise.resolve([]),
+      db.$queryRaw<any[]>`SELECT d.id,d.code,d.name,d.scope,d."valueKind",d."sortOrder",d."isFilterable",d."isActive",COALESCE(json_agg(pta."productTypeId") FILTER (WHERE pta."productTypeId" IS NOT NULL),'[]'::json) AS "productTypeIds" FROM attribute_definitions d LEFT JOIN product_type_attributes pta ON pta."definitionId"=d.id AND pta.scope=d.scope GROUP BY d.id ORDER BY d."sortOrder",d.code`,
     ]);
+    if (code && !DICTIONARY_REGISTRY.some((item) => item.code === code) && !definitions.some((item) => item.code === code)) return NextResponse.json({ error: "UNKNOWN_DICTIONARY" }, { status: 400 });
     const data = [
       ...brands.map((row) => labels("brand", row)),
       ...colors.map((row) => labels("color", row)),
@@ -53,7 +59,7 @@ export async function GET(request: Request) {
       ...globalTypes.map((row) => labels("productType", row)),
     ].filter((row) => !code || row.dictionary === code);
     const sorted = code ? sortDictionaryOptions(code as DictionaryCode, data as any) : data.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, "ru"));
-    return NextResponse.json({ data: sorted, globalTypes, legacyTypes: types, brands, role: session.role, canWrite: ["OWNER", "ADMIN", "DEVELOPER"].includes(session.role), registry: DICTIONARY_REGISTRY });
+    return NextResponse.json({ data: sorted, globalTypes, legacyTypes: types, brands, definitions: definitions.map((definition) => ({ ...definition, isManaged: !isFixedDictionary(definition.code) })), role: session.role, canWrite: ["OWNER", "ADMIN", "DEVELOPER"].includes(session.role), registry: DICTIONARY_REGISTRY });
   } catch (error) { return errorResponse(error); }
 }
 
@@ -61,11 +67,32 @@ export async function POST(request: Request) {
   try {
     await requireDictionaryMutation(request);
     const code = new URL(request.url).searchParams.get("code") ?? "";
-    const parsed = optionSchema.safeParse(await request.json());
+    const body = await request.json();
+    if (body?.kind === "definition") {
+      const parsedDefinition = definitionSchema.safeParse(body);
+      if (!parsedDefinition.success) return NextResponse.json({ error: "INVALID_ATTRIBUTE_DEFINITION" }, { status: 400 });
+      if (isFixedDictionary(parsedDefinition.data.code) || reservedAttributeCodes.has(parsedDefinition.data.code)) return NextResponse.json({ error: "RESERVED_ATTRIBUTE_CODE" }, { status: 409 });
+      const definition = parsedDefinition.data;
+      const db = adminDb();
+      await db.$transaction(async (tx) => {
+        const id = definition.id ?? newId();
+        await tx.$executeRaw`INSERT INTO attribute_definitions (id,code,name,scope,"valueKind","sortOrder","isFilterable","isActive") VALUES (${id},${definition.code},${definition.name},'VARIANT','OPTION',${definition.sortOrder},${definition.isFilterable},${definition.isActive})`;
+        for (const productTypeId of Array.from(new Set(definition.productTypeIds))) {
+          const type = await tx.$queryRaw<any[]>`SELECT id FROM product_types WHERE id=${productTypeId} LIMIT 1`;
+          if (!type.length) throw new Error("INVALID_PRODUCT_TYPE");
+          await tx.$executeRaw`INSERT INTO product_type_attributes ("productTypeId","definitionId",scope,"sortOrder") VALUES (${productTypeId},${id},'VARIANT',${definition.sortOrder})`;
+        }
+      });
+      return NextResponse.json({ ok: true }, { status: 201 });
+    }
+    const parsed = optionSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
     const value = parsed.data;
     if (legacyCodes.has(code)) return NextResponse.json({ error: "LEGACY_DICTIONARY_READ_ONLY" }, { status: 409 });
-    if (!optionCodes.has(code as DictionaryCode) && !["productLine", "productType", "productModel", "brand", "color"].includes(code)) return NextResponse.json({ error: "UNKNOWN_DICTIONARY" }, { status: 400 });
+    if (!optionCodes.has(code as DictionaryCode) && !["productLine", "productType", "productModel", "brand", "color"].includes(code)) {
+      const exists = await adminDb().$queryRaw<any[]>`SELECT 1 FROM attribute_definitions WHERE code=${code} AND scope='VARIANT' LIMIT 1`;
+      if (!exists.length) return NextResponse.json({ error: "UNKNOWN_DICTIONARY" }, { status: 400 });
+    }
     const db = adminDb();
     await db.$transaction(async (tx) => {
       if (code === "productLine") {
@@ -115,7 +142,23 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     await requireDictionaryMutation(request);
-    const body = await request.json() as { code?: string; id?: string; isActive?: boolean; label?: string; nameRu?: string | null; sortOrder?: number; brandIds?: string[]; brandId?: string; globalProductTypeId?: string; hex?: string | null };
+    const body = await request.json() as { kind?: string; code?: string; id?: string; isActive?: boolean; label?: string; name?: string; nameRu?: string | null; sortOrder?: number; brandIds?: string[]; brandId?: string; globalProductTypeId?: string; hex?: string | null; isFilterable?: boolean; productTypeIds?: string[] };
+    if (body.kind === "definition") {
+      if (!body.id || typeof body.isActive !== "boolean" || (body.name !== undefined && (!body.name.trim() || body.name.trim().length > 180)) || (body.sortOrder !== undefined && !Number.isInteger(body.sortOrder)) || (body.productTypeIds !== undefined && (!Array.isArray(body.productTypeIds) || body.productTypeIds.length > 100))) return NextResponse.json({ error: "INVALID_ATTRIBUTE_DEFINITION" }, { status: 400 });
+      const db = adminDb();
+      await db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<any[]>`SELECT id,code FROM attribute_definitions WHERE id=${body.id} AND scope='VARIANT' LIMIT 1`;
+        if (!rows[0]) throw new Error("NOT_FOUND");
+        if (isFixedDictionary(rows[0].code) || reservedAttributeCodes.has(rows[0].code)) throw new Error("RESERVED_ATTRIBUTE_CODE");
+        await tx.$executeRaw`UPDATE attribute_definitions SET name=COALESCE(${body.name?.trim() ?? null},name), "isActive"=${body.isActive}, "sortOrder"=COALESCE(${body.sortOrder ?? null},"sortOrder"), "isFilterable"=COALESCE(${body.isFilterable ?? null},"isFilterable"), "updatedAt"=NOW() WHERE id=${body.id}`;
+        for (const productTypeId of Array.from(new Set(body.productTypeIds ?? []))) {
+          const type = await tx.$queryRaw<any[]>`SELECT id FROM product_types WHERE id=${productTypeId} LIMIT 1`;
+          if (!type.length) throw new Error("INVALID_PRODUCT_TYPE");
+          await tx.$executeRaw`INSERT INTO product_type_attributes ("productTypeId","definitionId",scope,"sortOrder") VALUES (${productTypeId},${body.id},'VARIANT',${body.sortOrder ?? 0}) ON CONFLICT ("productTypeId","definitionId") DO NOTHING`;
+        }
+      });
+      return NextResponse.json({ ok: true });
+    }
     if (!body.code || !body.id || typeof body.isActive !== "boolean") return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
     if (body.label !== undefined && (!body.label.trim() || body.label.trim().length > 180)) return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
     if (body.nameRu !== undefined && body.nameRu !== null && body.nameRu.trim().length > 180) return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
@@ -150,7 +193,10 @@ export async function PATCH(request: Request) {
           for (const brandId of body.brandIds) await tx.$executeRaw`INSERT INTO global_product_type_brands ("productTypeId","brandId") VALUES (${body.id},${brandId})`;
         }
       } else {
-        if (!optionCodes.has(body.code as DictionaryCode)) throw new Error("UNKNOWN_DICTIONARY");
+        if (!optionCodes.has(body.code as DictionaryCode)) {
+          const custom = await tx.$queryRaw<any[]>`SELECT 1 FROM attribute_definitions WHERE code=${body.code} AND scope='VARIANT' LIMIT 1`;
+          if (!custom.length) throw new Error("UNKNOWN_DICTIONARY");
+        }
         if (!body.isActive) { const used = await tx.$queryRaw<any[]>`SELECT 1 FROM product_attribute_values WHERE "optionId"=${body.id} UNION ALL SELECT 1 FROM product_variant_attribute_values WHERE "optionId"=${body.id} LIMIT 1`; if (used.length) throw new Error("USED_VALUE"); }
         await tx.$executeRaw`UPDATE attribute_options SET "isActive"=${body.isActive}, label=COALESCE(${body.label ?? null},label), "sortOrder"=COALESCE(${body.sortOrder ?? null},"sortOrder"), "updatedAt"=NOW() WHERE id=${body.id}`;
       }
@@ -165,7 +211,7 @@ export async function DELETE(request: Request) {
     const url = new URL(request.url);
     const code = url.searchParams.get("code") ?? "";
     const id = url.searchParams.get("id") ?? "";
-    if (!id || (!optionCodes.has(code as DictionaryCode) && !["productLine", "productType", "productModel", "brand", "color"].includes(code))) {
+    if (!id || (!optionCodes.has(code as DictionaryCode) && !["productLine", "productType", "productModel", "brand", "color"].includes(code) && !(await adminDb().$queryRaw<any[]>`SELECT 1 FROM attribute_definitions WHERE code=${code} AND scope='VARIANT' LIMIT 1`).length)) {
       return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
     }
     const db = adminDb();

@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, ShoppingCart, Package, FolderTree, Tags, Circle, MapPin, Image, Star, Flame, Users, Settings, Files, Search, Menu, ExternalLink, ChevronDown, X, LogOut, UserRound } from "lucide-react";
+import { LayoutDashboard, ShoppingCart, Package, FolderTree, Tags, Circle, MapPin, Image, Star, Flame, Users, Settings, Files, Search, Menu, ExternalLink, ChevronDown, X, LogOut, UserRound, Layers3 } from "lucide-react";
 
 type Role = "OWNER" | "ADMIN" | "DEVELOPER" | "CITY_MANAGER";
 type City = { id?: string; slug: string; name: string };
@@ -25,7 +25,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [city, setCity] = React.useState("");
   const [loggingOut, setLoggingOut] = React.useState(false);
   const [logoutError, setLogoutError] = React.useState("");
-  const currentNav = nav.filter(([, , href]) => href !== "/admin/brands" && href !== "/admin/product-types");
+  const currentNav = [...nav, ["Группы товаров", Layers3, "/admin/product-groups"] as const].filter(([, , href]) => href !== "/admin/brands" && href !== "/admin/product-types");
   const isNavActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(`${href}/`));
   const visibleNav = user?.role === "CITY_MANAGER" || !user
     ? currentNav.filter(([, , href]) => href === "/admin" || href === "/admin/requests" || href === "/admin/products")

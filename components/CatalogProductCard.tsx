@@ -15,7 +15,8 @@ export default function CatalogProductCard({ product, city, variantId, compact =
   const selected = selectCatalogVariant(product, variantId);
   const variant = selected.variant;
   const [added, setAdded] = useState(false);
-  const favorite = isFavorite(product.slug);
+  const [failedImageSrc, setFailedImageSrc] = useState("");
+  const favorite = isFavorite(variant?.id);
   const imageSrc = productVariantImage(product, variant);
   const image = product.images.find((entry) => entry.src === imageSrc);
   const productHref = `/product/${encodeURIComponent(product.slug)}${variant ? `?variant=${encodeURIComponent(variant.id)}` : ""}`;
@@ -37,7 +38,7 @@ export default function CatalogProductCard({ product, city, variantId, compact =
     <div className="product-tile-main">
       <div className="product-tile-media">
         <Link className="product-tile-image-link" href={productHref} aria-label={product.name} onClick={revealProduct}>
-          <div className="product-tile-image">{imageSrc ? <img src={imageSrc} alt={image?.alt || product.name} loading="lazy" decoding="async" /> : <PackageOpen size={40} aria-label="Изображение отсутствует" />}</div>
+          <div className="product-tile-image">{imageSrc && failedImageSrc !== imageSrc ? <img src={imageSrc} alt="" loading="lazy" decoding="async" onError={() => setFailedImageSrc(imageSrc)} /> : <PackageOpen size={40} aria-label="Изображение отсутствует" />}</div>
         </Link>
         <div className="product-tile-top">
           <div className="product-tile-badges">
@@ -45,7 +46,7 @@ export default function CatalogProductCard({ product, city, variantId, compact =
             {product.isNew && <span className="product-new-chip">Новинка</span>}
             {product.isUsed && <span className="product-used-chip">Б/у</span>}
           </div>
-          <button className={`product-tile-favorite${favorite ? " active" : ""}`} type="button" aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite} onClick={() => toggleFavorite(product.slug)}><Heart size={19} fill={favorite ? "currentColor" : "none"} /></button>
+          <button className={`product-tile-favorite${favorite ? " active" : ""}`} type="button" aria-label={favorite ? "Удалить из избранного" : "Добавить в избранное"} aria-pressed={favorite} onClick={() => variant && toggleFavorite({ slug: product.slug, variantId: variant.id })}><Heart size={19} fill={favorite ? "currentColor" : "none"} /></button>
         </div>
       </div>
       <Link className="product-tile-details-link" href={productHref} onClick={revealProduct}>

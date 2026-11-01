@@ -26,6 +26,9 @@ export function sameOrigin(request: Pick<Request, "url" | "headers">) {
     const requestUrl = new URL(request.url);
     const localHost = requestUrl.hostname === "localhost" || requestUrl.hostname === "127.0.0.1" || requestUrl.hostname === "[::1]";
     if (localHost && parsedOrigin === requestOrigin) return true;
+    const originUrl = new URL(parsedOrigin);
+    const originLoopback = originUrl.hostname === "localhost" || originUrl.hostname === "127.0.0.1" || originUrl.hostname === "[::1]";
+    if (localHost && originLoopback && originUrl.protocol === requestUrl.protocol && originUrl.port === requestUrl.port) return true;
   }
 
   // The production proxy may give Next.js an internal URL; trust only the canonical public origin.

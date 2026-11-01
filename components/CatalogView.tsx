@@ -280,6 +280,7 @@ export default function CatalogView({
   typeFilter = "",
   section = "",
   menuItem = "",
+  modelId = "",
   scopeBrand = "",
   scopeCategory = "",
   scopeType = "",
@@ -295,6 +296,7 @@ export default function CatalogView({
   typeFilter?: string;
   section?: string;
   menuItem?: string;
+  modelId?: string;
   scopeBrand?: string;
   scopeCategory?: string;
   scopeType?: string;
@@ -316,6 +318,7 @@ export default function CatalogView({
   const [selectedRam, setSelectedRam] = useState(ram);
   const [selectedType, setSelectedType] = useState(typeFilter);
   const [selectedConnectivity, setSelectedConnectivity] = useState("");
+  const [selectedModelId, setSelectedModelId] = useState(modelId);
   const [selectedAvailability, setSelectedAvailability] = useState("");
   const [products, setProducts] = useState<CatalogProductDto[]>([]);
   const [catalogUniverse, setCatalogUniverse] = useState<CatalogProductDto[]>(
@@ -336,6 +339,7 @@ export default function CatalogView({
     brand?: string;
     type?: string;
     category?: string;
+    modelId?: string;
   } | null>(null);
   const [menuScopeLoaded, setMenuScopeLoaded] = useState(false);
   const [menuCleared, setMenuCleared] = useState(false);
@@ -380,29 +384,10 @@ export default function CatalogView({
     })
       .then((response) => (response.ok ? response.json() : Promise.reject()))
       .then((body) => {
-        const roots = Array.isArray(body.data)
-          ? (body.data as Array<{
-              id: string;
-              title: string;
-              filters?: {
-                brand?: string;
-                type?: string;
-                category?: string | null;
-              } | null;
-              children?: Array<{
-                id: string;
-                title: string;
-                filters?: {
-                  brand?: string;
-                  type?: string;
-                  category?: string | null;
-                } | null;
-              }>;
-            }>)
-          : [];
-        const node = roots
-          .flatMap((root) => [root, ...(root.children ?? [])])
-          .find((item) => item.id === menuItem);
+        type MenuScopeNode = { id: string; title: string; filters?: { brand?: string; type?: string; category?: string | null; modelId?: string } | null; children?: MenuScopeNode[] };
+        const roots = Array.isArray(body.data) ? body.data as MenuScopeNode[] : [];
+        const findNode = (nodes: MenuScopeNode[]): MenuScopeNode | undefined => { for (const node of nodes) { if (node.id === menuItem) return node; const nested = findNode(node.children ?? []); if (nested) return nested; } return undefined; };
+        const node = findNode(roots);
         setMenuTitle(node?.title ?? "Каталог");
         setMenuScope(
           node?.filters
@@ -410,6 +395,7 @@ export default function CatalogView({
                 brand: node.filters.brand ?? undefined,
                 type: node.filters.type ?? undefined,
                 category: node.filters.category ?? undefined,
+                modelId: node.filters.modelId ?? undefined,
               }
             : null,
         );
@@ -429,7 +415,9 @@ export default function CatalogView({
     setSelectedBrand(menuScope.brand ?? "");
     setSelectedType(menuScope.type ?? "");
     setSelectedCategory(menuScope.category ?? "");
+    setSelectedModelId(menuScope.modelId ?? "");
   }, [menuItem, menuScopeLoaded, menuScope]);
+  useEffect(() => { setSelectedModelId(modelId); }, [modelId]);
   useEffect(() => {
     if (!showSuggestions) return;
     const close = (event: PointerEvent) => {
@@ -537,6 +525,7 @@ export default function CatalogView({
     const controller = new AbortController();
     const filters = new URLSearchParams();
     if (effectiveMenuItem) filters.set("menuItem", effectiveMenuItem);
+    if (selectedModelId) filters.set("modelId", selectedModelId);
     loadCatalogProducts(city, controller.signal, filters)
       .then(setCatalogUniverse)
       .catch((cause: unknown) => {
@@ -544,7 +533,7 @@ export default function CatalogView({
           setCatalogUniverse([]);
       });
     return () => controller.abort();
-  }, [city, effectiveMenuItem]);
+  }, [city, effectiveMenuItem, selectedModelId]);
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams();
@@ -562,6 +551,7 @@ export default function CatalogView({
     if (scopeCategory) params.set("scopeCategory", scopeCategory);
     if (scopeType) params.set("scopeType", scopeType);
     if (effectiveMenuItem) params.set("menuItem", effectiveMenuItem);
+    if (selectedModelId) params.set("modelId", selectedModelId);
     if (selectedConnectivity) params.set("connectivity", selectedConnectivity);
     if (selectedMemory) params.set("memory", selectedMemory);
     if (selectedColor) params.set("color", selectedColor);
@@ -593,6 +583,7 @@ export default function CatalogView({
     selectedSim,
     selectedRam,
     effectiveMenuItem,
+    selectedModelId,
     scopeBrand,
     scopeCategory,
     scopeType,
@@ -608,6 +599,7 @@ export default function CatalogView({
     if (scopeCategory) params.set("scopeCategory", scopeCategory);
     if (scopeType) params.set("scopeType", scopeType);
     if (effectiveMenuItem) params.set("menuItem", effectiveMenuItem);
+    if (selectedModelId) params.set("modelId", selectedModelId);
     if (search.trim()) params.set("q", search.trim());
     if (selectedCategory) params.set("category", selectedCategory);
     if (selectedBrand) params.set("brand", selectedBrand);
@@ -632,6 +624,7 @@ export default function CatalogView({
     pathname,
     section,
     effectiveMenuItem,
+    selectedModelId,
     scopeBrand,
     scopeCategory,
     scopeType,

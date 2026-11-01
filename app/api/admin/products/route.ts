@@ -62,6 +62,10 @@ async function syncDictionaryLinks(
       >`SELECT 1 FROM product_type_attributes WHERE "productTypeId"=${product.productTypeId} AND "definitionId"=${definition.id} LIMIT 1`;
       if (!applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
     }
+    if (scope === "VARIANT") {
+      const applicable = await tx.$queryRaw<any[]>`SELECT 1 FROM product_type_attributes WHERE "productTypeId"=${product.productTypeId} AND "definitionId"=${definition.id} AND scope='VARIANT' LIMIT 1`;
+      if (!applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
+    }
     if (scope === "PRODUCT")
       await tx.$executeRaw`INSERT INTO product_attribute_values ("productId","definitionId","optionId") VALUES (${ownerId},${definition.id},${optionId}) ON CONFLICT ("productId","definitionId") DO UPDATE SET "optionId"=EXCLUDED."optionId","updatedAt"=NOW()`;
     else

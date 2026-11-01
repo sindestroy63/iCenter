@@ -6,12 +6,14 @@ import { CATALOG_MENU_SETTING_KEY, createDefaultCatalogMenu, parseCatalogMenu, t
 export const dynamic = "force-dynamic";
 
 async function readTaxonomy(db: ReturnType<typeof adminDb>): Promise<MenuTaxonomy> {
-  const [brands, types, categories] = await Promise.all([
+  const [brands, types, models, categories, groups] = await Promise.all([
     db.$queryRaw<MenuTaxonomy["brands"]>`SELECT id,slug,name FROM brands WHERE "isActive"=TRUE ORDER BY "sortOrder",name`,
-    db.$queryRaw<MenuTaxonomy["types"]>`SELECT pt.id,pt.slug,pt.name,pt."brandId",b.slug AS "brandSlug" FROM product_types pt JOIN brands b ON b.id=pt."brandId" WHERE pt."isActive"=TRUE AND b."isActive"=TRUE ORDER BY pt.name`,
+    db.$queryRaw<MenuTaxonomy["types"]>`SELECT pt.id,pt.slug,pt.name,pt."brandId",b.slug AS "brandSlug",mapping."globalProductTypeId" FROM product_types pt JOIN brands b ON b.id=pt."brandId" JOIN legacy_product_type_mappings mapping ON mapping."legacyProductTypeId"=pt.id WHERE pt."isActive"=TRUE AND b."isActive"=TRUE ORDER BY pt.name`,
+    db.$queryRaw<MenuTaxonomy["models"]>`SELECT m.id,m.name,m."brandId",m."globalProductTypeId",b.name AS "brandName",g.name AS "typeName" FROM product_models m JOIN brands b ON b.id=m."brandId" JOIN global_product_types g ON g.id=m."globalProductTypeId" WHERE m."isActive"=TRUE AND b."isActive"=TRUE AND g."isActive"=TRUE ORDER BY m.name`,
     db.$queryRaw<MenuTaxonomy["categories"]>`SELECT id,slug,name,"parentId" FROM categories WHERE "isActive"=TRUE ORDER BY "sortOrder",name`,
+    db.$queryRaw<MenuTaxonomy["groups"]>`SELECT id,slug,title,isactive AS "isActive" FROM catalog_groups WHERE isactive=TRUE ORDER BY sortorder,title`.catch(() => []),
   ]);
-  return { brands, types, categories };
+  return { brands, types, models, categories, groups };
 }
 
 export async function GET() {
@@ -42,12 +44,34 @@ export async function PUT(request: Request) {
     const taxonomy = await readTaxonomy(db);
     const brands = new Set(taxonomy.brands.map((item) => item.id));
     const types = new Set(taxonomy.types.map((item) => item.id));
+    const models = new Map(taxonomy.models.map((item) => [item.id, item]));
     const categories = new Set(taxonomy.categories.map((item) => item.id));
+    const groups = new Set((taxonomy.groups ?? []).map((item) => item.id));
+    const byId = new Map(menu.items.map((item) => [item.id, item]));
     for (const item of menu.items) {
       if (item.action?.type === "category" && item.action.categoryId !== "trade-in" && !categories.has(item.action.categoryId)) return NextResponse.json({ error: "INVALID_CATEGORY" }, { status: 400 });
-      if (item.action?.type === "filters") for (const rule of item.action.rules) {
+      if (item.action?.type === "group" && !groups.has(item.action.groupId)) return NextResponse.json({ error: "INVALID_GROUP" }, { status: 400 });
+      const action = item.action;
+      if (action?.type === "filters") for (const rule of action.rules) {
         if (rule.field === "brand" && !brands.has(String(rule.value))) return NextResponse.json({ error: "INVALID_BRAND" }, { status: 400 });
         if (rule.field === "type" && !types.has(String(rule.value))) return NextResponse.json({ error: "INVALID_PRODUCT_TYPE" }, { status: 400 });
+        if (rule.field === "model") {
+          const model = models.get(String(rule.value));
+          if (!model) return NextResponse.json({ error: "INVALID_MODEL" }, { status: 400 });
+          const inheritedRules: typeof action.rules = [];
+          let parentId = item.parentId;
+          while (parentId) {
+            const parent = byId.get(parentId);
+            if (!parent) break;
+            if (parent.action?.type === "filters") inheritedRules.push(...parent.action.rules);
+            parentId = parent.parentId;
+          }
+          const rules = [...inheritedRules, ...action.rules];
+          const brandRule = rules.find((entry) => entry.field === "brand");
+          if (brandRule && brandRule.value !== model.brandId) return NextResponse.json({ error: "MODEL_BRAND_MISMATCH" }, { status: 400 });
+          const typeRule = rules.find((entry) => entry.field === "type");
+          if (typeRule && taxonomy.types.find((entry) => entry.id === typeRule.value)?.globalProductTypeId !== model.globalProductTypeId) return NextResponse.json({ error: "MODEL_TYPE_MISMATCH" }, { status: 400 });
+        }
         if (rule.field === "category" && !categories.has(String(rule.value))) return NextResponse.json({ error: "INVALID_CATEGORY" }, { status: 400 });
       }
     }
