@@ -7,7 +7,7 @@ process.env.DATABASE_URL = "postgresql://icenter_test:test@127.0.0.1:55432/icent
 process.env.ICENTER_NOTIFICATION_TRANSPORT = "mock";
 process.env.ICENTER_NOTIFICATION_OUTBOX = outbox;
 delete process.env.TELEGRAM_BOT_TOKEN;
-delete process.env.TELEGRAM_REQUESTS_CHAT_ID;
+delete process.env.TELEGRAM_WORK_CHAT_ID;
 await rm(outbox, { force: true });
 
 const { deliverNotification, notificationTestTransport } = await import("../lib/notification-transport.ts");

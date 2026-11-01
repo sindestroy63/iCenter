@@ -30,7 +30,7 @@ export function notificationMode() {
 export function assertNotificationTestIsolation() {
   if (notificationMode() !== "mock") return;
   if (!testDatabaseIdentity()) throw new Error("NOTIFICATION_TEST_ISOLATION_REQUIRED");
-  if (process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_REQUESTS_CHAT_ID || process.env.NOTIFICATION_EMAIL_TO || process.env.NOTIFICATION_WEBHOOK_URL) {
+  if (process.env.TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_WORK_CHAT_ID || process.env.NOTIFICATION_EMAIL_TO || process.env.NOTIFICATION_WEBHOOK_URL) {
     throw new Error("REAL_NOTIFICATION_CONFIGURATION_FORBIDDEN");
   }
 }

@@ -52,11 +52,11 @@ export async function createTradeInLead(input: TradeInInput, idempotencyKey: str
     ON CONFLICT ("idempotencyKey") DO NOTHING
     RETURNING "requestNumber"
   `;
-  if (inserted[0]) return { requestNumber: inserted[0].requestNumber, replayed: false };
+  if (inserted[0]) return { requestNumber: inserted[0].requestNumber, replayed: false, productName: product?.name ?? input.desiredDevice.trim() };
   const prior = await client.$queryRaw<Array<{ requestNumber: string; requestHash: string }>>`SELECT "requestNumber","requestHash" FROM trade_in_requests WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1`;
   if (!prior[0]) throw new Error("TRADE_IN_SAVE_FAILED");
   if (prior[0].requestHash !== hash) throw new Error("IDEMPOTENCY_CONFLICT");
-  return { requestNumber: prior[0].requestNumber, replayed: true };
+  return { requestNumber: prior[0].requestNumber, replayed: true, productName: product?.name ?? input.desiredDevice.trim() };
 }
 
 export type TradeInViewer = { userId: string; role: string };

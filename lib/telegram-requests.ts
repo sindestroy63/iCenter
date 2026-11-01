@@ -3,10 +3,11 @@ import "server-only";
 import { PrismaClient } from "@prisma/client";
 import { decryptPii } from "@/lib/request-pii";
 import { deliverNotification, notificationMode, assertNotificationTestIsolation } from "@/lib/notification-transport";
+import { sendTelegramMessage } from "@/lib/telegram/client";
 
 type TelegramResponse = { ok: boolean; result?: { message_id?: number }; description?: string };
 type TelegramTransport = (token: string, chatId: string, text: string) => Promise<TelegramResponse>;
-const TELEGRAM_TIMEOUT_MS = 10_000;
+const TELEGRAM_TIMEOUT_MS = 5_000;
 
 declare global { var telegramPrisma: PrismaClient | undefined; }
 
@@ -16,20 +17,8 @@ const defaultTransport: TelegramTransport = async (token, chatId, text) => {
     await deliverNotification({ type: "telegram", recipient: "test-chat", text, createdAt: new Date().toISOString() });
     return { ok: true, result: { message_id: Date.now() } };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-      cache: "no-store",
-      signal: controller.signal,
-    });
-    return await response.json() as TelegramResponse;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const result = await sendTelegramMessage(text, { token, chatId, timeoutMs: TELEGRAM_TIMEOUT_MS });
+  return result.status === "sent" ? { ok: true, result: { message_id: result.messageId } } : { ok: false, description: result.reason };
 };
 
 function db() {
@@ -46,7 +35,7 @@ export async function notifyRequest(orderNumber: string, transport: TelegramTran
   const isTestTransport = transport !== defaultTransport;
   if (notificationMode() === "mock") assertNotificationTestIsolation();
   const token = process.env.TELEGRAM_BOT_TOKEN ?? (isTestTransport || notificationMode() === "mock" ? "test-token" : undefined);
-  const chatId = process.env.TELEGRAM_REQUESTS_CHAT_ID ?? (isTestTransport || notificationMode() === "mock" ? "test-chat" : undefined);
+  const chatId = process.env.TELEGRAM_WORK_CHAT_ID ?? (isTestTransport || notificationMode() === "mock" ? "test-chat" : undefined);
   if (!token || !chatId) return "not-configured";
   const client = db();
   const rows = await client.$queryRaw<any[]>`
@@ -77,7 +66,7 @@ export async function notifyRequest(orderNumber: string, transport: TelegramTran
     return state[0]?.telegramMessageId ? "already-sent" : "failed";
   }
   const pii = decryptPii<{ name: string; phone: string; address: string; comment: string }>(rows[0].encryptedPiiPayload);
-  const lines = rows.map((row) => `- ${row.productNameSnapshot ?? row.skuSnapshot} × ${row.quantity} — ${money(Number(row.price))}`).join("\n");
+  const lines = rows.map((row) => `- ${row.productNameSnapshot ?? row.skuSnapshot}${row.variantSnapshot ? ` / ${row.variantSnapshot}` : ""} × ${row.quantity} — ${money(Number(row.price))}`).join("\n");
   const text = [
     `Новая заявка ${orderNumber}`,
     `Город: ${rows[0].city}`,

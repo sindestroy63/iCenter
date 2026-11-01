@@ -5,6 +5,7 @@ import { z } from "zod";
 import { removeCreatedLeadPhotos, saveLeadPhotos } from "@/lib/lead-upload";
 import { sameOrigin } from "@/lib/same-origin";
 import { createTradeInLead, type LeadRequestType, type TradeInInput } from "@/lib/trade-in-service";
+import { notifyLeadCreated } from "@/lib/telegram/notifications";
 
 const leadSchema = z.object({
   requestType: z.enum(["trade_in", "installment"]), name: z.string().trim().min(1).max(120),
@@ -59,7 +60,27 @@ export async function handleLeadPost(request: Request, requestType: LeadRequestT
     let result;
     try { result = await createTradeInLead({ ...parsed.data, photoUrls: savedPhotos.urls }, key); }
     catch (error) { await removeCreatedLeadPhotos(savedPhotos.createdFiles); throw error; }
-    return NextResponse.json(result, { status: result.replayed ? 200 : 201, headers: { "cache-control": "no-store" } });
+    if (!result.replayed) {
+      await notifyLeadCreated({
+        requestType: parsed.data.requestType,
+        requestNumber: result.requestNumber,
+        city: parsed.data.city,
+        name: parsed.data.name,
+        phone: parsed.data.phone,
+        productName: result.productName,
+        brand: parsed.data.brand,
+        deviceType: parsed.data.deviceType,
+        device: parsed.data.device,
+        configuration: parsed.data.configuration,
+        color: parsed.data.color,
+        batteryHealth: parsed.data.batteryHealth,
+        equipment: parsed.data.equipment,
+        condition: parsed.data.condition,
+        desiredDevice: parsed.data.desiredDevice,
+        comment: parsed.data.comment,
+      });
+    }
+    return NextResponse.json({ requestNumber: result.requestNumber, replayed: result.replayed }, { status: result.replayed ? 200 : 201, headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (["INVALID_UPLOAD", "REQUEST_TOO_LARGE", "CITY_UNAVAILABLE", "PRODUCT_UNAVAILABLE", "IDEMPOTENCY_CONFLICT"].includes(message)) return NextResponse.json({ error: message }, { status: message === "IDEMPOTENCY_CONFLICT" ? 409 : message === "REQUEST_TOO_LARGE" ? 413 : 400 });

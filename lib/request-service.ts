@@ -108,8 +108,14 @@ export async function createRequest(input: RequestInput, idempotencyKey: string)
       `;
       return { requestNumber, replayed: false };
     }, { maxWait: 5000, timeout: 15000 });
-    await notifyRequest(result.requestNumber);
-    return result;
+    if (!result.replayed) {
+      try {
+        await notifyRequest(result.requestNumber);
+      } catch {
+        // The order is already committed; notification delivery must not fail the request.
+      }
+    }
+    return { requestNumber: result.requestNumber, replayed: result.replayed };
   } catch (error) {
     if (error instanceof RequestError) throw error;
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {

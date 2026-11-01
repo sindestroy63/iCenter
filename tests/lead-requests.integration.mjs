@@ -62,7 +62,7 @@ try {
   const city = cityRows[0].slug;
 
   server = spawn(process.execPath, [path.join("node_modules", "next", "dist", "bin", "next"), "start", "-p", String(port)], {
-    cwd: process.cwd(), stdio: "inherit", env: { ...process.env, DATABASE_URL: databaseUrl, REQUEST_PII_KEY: piiKey, UPLOAD_DIR: uploadRoot, NODE_ENV: "production", ICENTER_LOCAL_DEV: "1", ICENTER_NOTIFICATION_TRANSPORT: "mock", TELEGRAM_BOT_TOKEN: "", TELEGRAM_REQUESTS_CHAT_ID: "", ICENTER_NOTIFICATION_OUTBOX: path.join(uploadRoot, "notifications.jsonl") },
+    cwd: process.cwd(), stdio: "inherit", env: { ...process.env, DATABASE_URL: databaseUrl, REQUEST_PII_KEY: piiKey, UPLOAD_DIR: uploadRoot, NODE_ENV: "production", ICENTER_LOCAL_DEV: "1", ICENTER_NOTIFICATION_TRANSPORT: "mock", TELEGRAM_BOT_TOKEN: "", TELEGRAM_WORK_CHAT_ID: "", ICENTER_NOTIFICATION_OUTBOX: path.join(uploadRoot, "notifications.jsonl") },
   });
   await waitForServer();
   const tradeValues = { name: "Integration Trade", phone: "+7 (999) 123-45-67", city, brand: "Apple", deviceType: "iPhone", device: "Integration Device", configuration: "128 ГБ", color: "Чёрный", batteryHealth: "90", condition: "Хорошее", comment: "integration", desiredDevice: "", personalDataConsent: "true", privacyConsent: "true" };
