@@ -3,6 +3,17 @@ import assert from "node:assert/strict";
 const { sendTelegramMessage } = await import("../lib/telegram/client.ts");
 const { formatLeadNotification, formatOrderNotification } = await import("../lib/telegram/formatters.ts");
 
+function assertTelegramHtml(text) {
+  const tags = text.match(/<\/?(?:b|i)>/g) ?? [];
+  const stack = [];
+  for (const tag of tags) {
+    if (tag.startsWith("</")) assert.equal(stack.pop(), tag.slice(2, -1));
+    else stack.push(tag.slice(1, -1));
+  }
+  assert.deepEqual(stack, []);
+  assert.doesNotMatch(text, /\n\n\n/);
+}
+
 let calls = 0;
 const sent = await sendTelegramMessage("<b>hello</b>", {
   token: "test-token",
@@ -42,10 +53,11 @@ const order = formatOrderNotification({
 });
 assert.match(order, /🛒 <b>НОВЫЙ ЗАКАЗ<\/b>/);
 assert.match(order, /№ <b>IC-20261101-AB12<\/b> · 📍 Самара/);
-assert.match(order, /iPhone 18 Pro · 256 GB · Цвет: Тёмный · SIM: Dual eSIM/);
+assert.match(order, /<b>1\. iPhone 18 Pro<\/b>\nХарактеристики: 256 GB · Цвет: Тёмный · SIM: Dual eSIM/);
 assert.match(order, /Алиса &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 assert.match(order, /<b>Итого: 199\s?990,00\s?₽<\/b>/);
 assert.doesNotMatch(order, /<script>|\[object Object\]|must not leak/);
+assertTelegramHtml(order);
 
 const deduplicated = formatOrderNotification({
   requestNumber: "IC-DUP", city: "Самара", name: "Клиент", phone: "+7 900", total: 1000,
@@ -60,8 +72,11 @@ const tradeIn = formatLeadNotification({
 assert.match(tradeIn, /🔄 <b>НОВАЯ ЗАЯВКА TRADE-IN<\/b>/);
 assert.match(tradeIn, /№ <b>TI-1<\/b> · 📍 Москва/);
 assert.match(tradeIn, /iPhone 14 · Синий/);
-assert.match(tradeIn, /Состояние батареи: 87%/);
+assert.match(tradeIn, /Состояние<\/b>\nБатарея: 87%/);
 assert.match(tradeIn, /Коробка, Кабель/);
+assert.match(tradeIn, /Комплектация<\/b>[\s\S]*\n\n🧾 <b>Состояние<\/b>/);
+assert.doesNotMatch(tradeIn, /\n\n\n/);
+assertTelegramHtml(tradeIn);
 
 const installment = formatLeadNotification({
   requestType: "installment", requestNumber: "IN-1", city: "Самара", name: "Анна", phone: "+7 901", productName: "MacBook Air",
@@ -69,6 +84,10 @@ const installment = formatLeadNotification({
 assert.match(installment, /💳 <b>НОВАЯ ЗАЯВКА НА РАССРОЧКУ<\/b>/);
 assert.match(installment, /MacBook Air/);
 assert.doesNotMatch(installment, /Комментарий:|Состояние батареи:|undefined|null/);
+assertTelegramHtml(installment);
+assert.match(order, /Товары<\/b>\n<b>1\./);
+assert.match(order, /Получение<\/b>[\s\S]*\n\n💬 <b>Комментарий<\/b>/);
+assert.doesNotMatch(order, /\n\n\n/);
 
 const long = formatOrderNotification({
   requestNumber: "IC-LONG", city: "Самара", name: "Клиент", phone: "+7 900 000-00-00", total: 123456,
@@ -84,6 +103,9 @@ assert.match(long, /Клиент/);
 assert.match(long, /\+7 900 000-00-00/);
 assert.match(long, /Итого:/);
 assert.doesNotMatch(long, /\[object Object\]/);
+assertTelegramHtml(long);
+assert.equal((long.match(/<b>\d+\. Товар/g) ?? []).length, (long.match(/Количество: 1/g) ?? []).length);
+assert.equal((long.match(/<b>\d+\. Товар/g) ?? []).length, (long.match(/Цена: 1 000,00 ₽/g) ?? []).length);
 
 assert.deepEqual(await sendTelegramMessage("no env", { fetcher: async () => { throw new Error("must not call"); } }), { status: "skipped", reason: "NOT_CONFIGURED" });
 console.log("Telegram templates and client checks passed");

@@ -95,51 +95,80 @@ function variantDetails(value: unknown, productName: string): string[] {
   return details.map((detail) => escapeHtml(detail)).filter((detail, index, all) => all.indexOf(detail) === index);
 }
 
-type MessageLine = { value: string; optional?: boolean };
+type MessageLine = { value: string; optional?: boolean; group?: string };
 
 function finish(lines: MessageLine[]) {
-  let output = lines.filter((line) => line.value).map((line) => ({ ...line }));
+  const normalize = (input: MessageLine[]) => {
+    const result: MessageLine[] = [];
+    for (const line of input) {
+      if (!line.value) {
+        if (result.length && result[result.length - 1].value) result.push({ value: "" });
+      } else result.push({ ...line });
+    }
+    while (result[0]?.value === "") result.shift();
+    while (result[result.length - 1]?.value === "") result.pop();
+    return result;
+  };
+  let output = normalize(lines);
   const length = () => output.reduce((total, line) => total + line.value.length + 1, 0);
   while (length() > OUTPUT_LIMIT) {
     const optionalIndex = output.findLastIndex((line) => line.optional);
     if (optionalIndex < 0) break;
-    output.splice(optionalIndex, 1);
+    const group = output[optionalIndex].group;
+    if (group) output = output.filter((line) => line.group !== group);
+    else output.splice(optionalIndex, 1);
+    output = normalize(output);
   }
   const result = output.map((line) => line.value).join("\n");
   if (result.length <= MESSAGE_LIMIT) return result;
   // All user-controlled optional lines have already been removed. Keep only
   // complete mandatory lines instead of cutting through an HTML tag.
-  return lines.filter((line) => line.value && !line.optional).map((line) => line.value).join("\n").slice(0, MESSAGE_LIMIT);
+  return normalize(lines.filter((line) => !line.optional)).map((line) => line.value).join("\n");
 }
 
 export function formatOrderNotification(order: OrderNotification) {
-  const items = order.items.map((item): MessageLine => {
+  const items = order.items.flatMap((item, index): MessageLine[] => {
     const productName = plain(item.productName, 180) || "Товар";
     const details = variantDetails(item.variant, productName);
     const sku = plain(item.sku, 80);
     const product = escapeHtml(productName);
-    const description = [product, ...details].join(" · ");
-    return {
-      value: `• ${description}${sku ? ` <i>(${escapeHtml(sku)})</i>` : ""} × ${item.quantity} — ${money(item.unitPrice * item.quantity)}`,
-      optional: true,
-    };
+    const detailLine = details.length ? `Характеристики: ${details.join(" · ")}` : "";
+    const group = `item-${index}`;
+    const lines: MessageLine[] = [
+      { value: `<b>${index + 1}. ${product}</b>`, optional: true, group },
+      { value: detailLine, optional: true, group },
+      { value: sku ? `Артикул: <i>${escapeHtml(sku)}</i>` : "", optional: true, group },
+      { value: `Количество: ${item.quantity}`, optional: true, group },
+      { value: `Цена: ${money(item.unitPrice * item.quantity)}`, optional: true, group },
+      { value: "", optional: true, group },
+    ];
+    return lines;
   });
+  const deliveryFields = [
+    optional("Способ", order.fulfillment, 80),
+    optional("Адрес", order.address, 300),
+  ].filter(Boolean).map((value) => ({ value, optional: true }));
+  const commentSection: MessageLine[] = order.comment ? [
+    { value: "" },
+    { value: "💬 <b>Комментарий</b>", optional: true },
+    { value: optional("Текст", order.comment, 500), optional: true },
+  ] : [];
   return finish([
     { value: "🛒 <b>НОВЫЙ ЗАКАЗ</b>" },
     { value: `№ <b>${escapeHtml(plain(order.requestNumber, 120))}</b> · 📍 ${escapeHtml(plain(order.city, 120))}` },
     { value: "" },
-    { value: "<b>Товары</b>" },
+    { value: "🛍️ <b>Товары</b>" },
     ...items,
     { value: "" },
-    { value: "<b>Клиент</b>" },
+    { value: "👤 <b>Клиент</b>" },
     { value: optional("👤 Клиент", order.name, 120) },
     { value: optional("📞 Телефон", order.phone, 40) },
     { value: optional("Связь", order.contactMethod, 80), optional: true },
     { value: "" },
+    ...(deliveryFields.length ? [{ value: "🚚 <b>Получение</b>", optional: true }, ...deliveryFields] : []),
+    ...commentSection,
+    ...(deliveryFields.length || commentSection.length ? [{ value: "" }] : []),
     { value: `💰 <b>Итого: ${escapeHtml(money(order.total))}</b>` },
-    { value: optional("🚚 Получение", order.fulfillment, 80), optional: true },
-    { value: optional("Адрес", order.address, 300), optional: true },
-    { value: optional("Комментарий", order.comment, 500), optional: true },
   ]);
 }
 
@@ -164,19 +193,33 @@ export function formatLeadNotification(lead: LeadNotification) {
   const device = deviceParts
     .map(escapeHtml)
     .join(" · ");
+  const equipment = lead.equipment?.filter((item) => typeof item === "string").join(", ") ?? "";
+  const conditionFields: MessageLine[] = [];
+  if (isTradeIn && equipment) conditionFields.push({ value: "📦 <b>Комплектация</b>" }, { value: `Состав: ${escapeHtml(equipment)}` });
+  const stateFields: MessageLine[] = [];
+  const battery = lead.batteryHealth === null || lead.batteryHealth === undefined ? "" : `${lead.batteryHealth}%`;
+  if (isTradeIn && (battery || plain(lead.condition))) {
+    stateFields.push({ value: "🧾 <b>Состояние</b>" });
+    if (battery) stateFields.push({ value: `Батарея: ${escapeHtml(battery)}` });
+    if (plain(lead.condition)) stateFields.push({ value: `Описание: ${escapeHtml(plain(lead.condition, 180))}` });
+  }
+  const commentFields: MessageLine[] = lead.comment ? [
+    { value: "" },
+    { value: "💬 <b>Комментарий</b>" },
+    { value: `Текст: ${escapeHtml(plain(lead.comment, 500))}`, optional: true },
+  ] : [];
   return finish([
     { value: title },
     { value: `№ <b>${escapeHtml(plain(lead.requestNumber, 120))}</b> · 📍 ${escapeHtml(plain(lead.city, 120))}` },
     { value: "" },
-    { value: isTradeIn ? "<b>Устройство</b>" : "<b>Товар</b>" },
+    { value: isTradeIn ? "📱 <b>Устройство</b>" : "🛍️ <b>Товар</b>" },
     { value: device ? `📱 ${device}` : "", optional: true },
-    { value: optional("Состояние батареи", lead.batteryHealth === null || lead.batteryHealth === undefined ? "" : `${lead.batteryHealth}%`, 20), optional: true },
-    { value: optional("Комплектация", lead.equipment?.filter((item) => typeof item === "string").join(", "), 300), optional: true },
-    { value: optional("Состояние", lead.condition, 180), optional: true },
+    ...(conditionFields.length ? [{ value: "" }, ...conditionFields] : []),
+    ...(stateFields.length ? [{ value: "" }, ...stateFields] : []),
     { value: "" },
-    { value: "<b>Клиент</b>" },
+    { value: "👤 <b>Клиент</b>" },
     { value: optional("👤 Клиент", lead.name, 120) },
     { value: optional("📞 Телефон", lead.phone, 40) },
-    { value: optional("Комментарий", lead.comment, 500), optional: true },
+    ...commentFields,
   ]);
 }
