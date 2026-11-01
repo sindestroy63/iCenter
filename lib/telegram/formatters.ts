@@ -44,11 +44,26 @@ function escapeHtml(value: string): string {
 
 function optional(label: string, value: unknown, maxLength = 300) {
   const text = plain(value, maxLength);
-  return text ? `${label}: ${escapeHtml(text)}` : "";
+  const displayLabel = label.includes("Клиент") ? "👤 Имя" : label;
+  return text ? `${displayLabel}: ${escapeHtml(text)}` : "";
 }
 
 function money(amount: number) {
   return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 2 }).format(amount);
+}
+
+function fulfillmentName(value: unknown) {
+  const fulfillment = String(value ?? "").trim();
+  const normalized = fulfillment.toLocaleUpperCase("en-US");
+  if (normalized === "DELIVERY") return "Доставка";
+  if (normalized === "PICKUP") return "Самовывоз";
+  return plain(fulfillment, 80);
+}
+
+function cityName(value: unknown) {
+  const city = plain(value, 120);
+  const names: Record<string, string> = { samara: "Самара", moscow: "Москва", "saint-petersburg": "Санкт-Петербург", orenburg: "Оренбург" };
+  return names[city.toLocaleLowerCase("ru")] ?? city;
 }
 
 function normalizeForMatch(value: string) {
@@ -145,7 +160,7 @@ export function formatOrderNotification(order: OrderNotification) {
     return lines;
   });
   const deliveryFields = [
-    optional("Способ", order.fulfillment, 80),
+    optional("Способ", fulfillmentName(order.fulfillment), 80),
     optional("Адрес", order.address, 300),
   ].filter(Boolean).map((value) => ({ value, optional: true }));
   const commentSection: MessageLine[] = order.comment ? [
@@ -155,7 +170,7 @@ export function formatOrderNotification(order: OrderNotification) {
   ] : [];
   return finish([
     { value: "🛒 <b>НОВЫЙ ЗАКАЗ</b>" },
-    { value: `№ <b>${escapeHtml(plain(order.requestNumber, 120))}</b> · 📍 ${escapeHtml(plain(order.city, 120))}` },
+    { value: `№ <b>${escapeHtml(plain(order.requestNumber, 120))}</b> · 📍 ${escapeHtml(cityName(order.city))}` },
     { value: "" },
     { value: "🛍️ <b>Товары</b>" },
     ...items,
@@ -210,7 +225,7 @@ export function formatLeadNotification(lead: LeadNotification) {
   ] : [];
   return finish([
     { value: title },
-    { value: `№ <b>${escapeHtml(plain(lead.requestNumber, 120))}</b> · 📍 ${escapeHtml(plain(lead.city, 120))}` },
+    { value: `№ <b>${escapeHtml(plain(lead.requestNumber, 120))}</b> · 📍 ${escapeHtml(cityName(lead.city))}` },
     { value: "" },
     { value: isTradeIn ? "📱 <b>Устройство</b>" : "🛍️ <b>Товар</b>" },
     { value: device ? `📱 ${device}` : "", optional: true },

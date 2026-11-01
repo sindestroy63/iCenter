@@ -44,8 +44,8 @@ const timeout = await sendTelegramMessage("hello", {
 assert.deepEqual(timeout, { status: "failed", reason: "TIMEOUT" });
 
 const order = formatOrderNotification({
-  requestNumber: "IC-20261101-AB12", city: "Самара", name: "Алиса <script>alert(1)</script>", phone: "+7 999 111-22-33",
-  contactMethod: "Телефон", fulfillment: "Доставка", address: "Ленина, 1", comment: "Позвонить после 18:00",
+  requestNumber: "IC-20261101-AB12", city: "samara", name: "Алиса <script>alert(1)</script>", phone: "+7 999 111-22-33",
+  contactMethod: "Телефон", fulfillment: "DELIVERY", address: "Ленина, 1", comment: "Позвонить после 18:00",
   total: 199_990, items: [{
     productName: "iPhone 18 Pro", sku: "SKU-18P", quantity: 1, unitPrice: 199_990,
     variant: { label: "256 GB", attributes: { color: "Тёмный", storage: "256 GB", simType: "Dual eSIM", connectivity: { internal: "must not leak" } } },
@@ -53,6 +53,9 @@ const order = formatOrderNotification({
 });
 assert.match(order, /🛒 <b>НОВЫЙ ЗАКАЗ<\/b>/);
 assert.match(order, /№ <b>IC-20261101-AB12<\/b> · 📍 Самара/);
+assert.match(order, /👤 Имя: Алиса/);
+assert.match(order, /Способ: Доставка/);
+assert.match(order, /<b>Клиент<\/b>/);
 assert.match(order, /<b>1\. iPhone 18 Pro<\/b>\nХарактеристики: 256 GB · Цвет: Тёмный · SIM: Dual eSIM/);
 assert.match(order, /Алиса &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 assert.match(order, /<b>Итого: 199\s?990,00\s?₽<\/b>/);
@@ -65,12 +68,21 @@ const deduplicated = formatOrderNotification({
 });
 assert.equal((deduplicated.match(/256 GB/g) ?? []).length, 1);
 
+const pickup = formatOrderNotification({
+  requestNumber: "IC-PICKUP", city: "unknown-city", name: "Клиент", phone: "+7 900", fulfillment: "PICKUP", total: 1000,
+  items: [{ productName: "Phone", quantity: 1, unitPrice: 1000 }],
+});
+assert.match(pickup, /📍 unknown-city/);
+assert.match(pickup, /Способ: Самовывоз/);
+assert.match(pickup, /👤 Имя: Клиент/);
+
 const tradeIn = formatLeadNotification({
-  requestType: "trade_in", requestNumber: "TI-1", city: "Москва", name: "Борис", phone: "+7 900",
+  requestType: "trade_in", requestNumber: "TI-1", city: "moscow", name: "Борис", phone: "+7 900",
   device: "iPhone 14", color: "Синий", batteryHealth: 87, equipment: ["Коробка", "Кабель"], condition: "Хорошее", comment: "Без царапин",
 });
 assert.match(tradeIn, /🔄 <b>НОВАЯ ЗАЯВКА TRADE-IN<\/b>/);
 assert.match(tradeIn, /№ <b>TI-1<\/b> · 📍 Москва/);
+assert.match(tradeIn, /👤 Имя: Борис/);
 assert.match(tradeIn, /iPhone 14 · Синий/);
 assert.match(tradeIn, /Состояние<\/b>\nБатарея: 87%/);
 assert.match(tradeIn, /Коробка, Кабель/);
@@ -79,10 +91,12 @@ assert.doesNotMatch(tradeIn, /\n\n\n/);
 assertTelegramHtml(tradeIn);
 
 const installment = formatLeadNotification({
-  requestType: "installment", requestNumber: "IN-1", city: "Самара", name: "Анна", phone: "+7 901", productName: "MacBook Air",
+  requestType: "installment", requestNumber: "IN-1", city: "kazan", name: "Анна", phone: "+7 901", productName: "MacBook Air",
 });
 assert.match(installment, /💳 <b>НОВАЯ ЗАЯВКА НА РАССРОЧКУ<\/b>/);
 assert.match(installment, /MacBook Air/);
+assert.match(installment, /📍 kazan/);
+assert.match(installment, /👤 Имя: Анна/);
 assert.doesNotMatch(installment, /Комментарий:|Состояние батареи:|undefined|null/);
 assertTelegramHtml(installment);
 assert.match(order, /Товары<\/b>\n<b>1\./);
