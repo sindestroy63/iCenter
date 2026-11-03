@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { requireGlobalAdminMutation } from "@/lib/auth";
 import { adminDb, uploadFilePath } from "@/lib/admin-db";
+import { writeAuditLog } from "@/lib/admin-audit";
 import { rm } from "node:fs/promises";
 
 export const runtime = "nodejs";
 
 export async function DELETE(request: Request, { params }: { params: { id: string } }) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const result = await adminDb().$transaction(async tx => {
       const rows = await tx.$queryRaw<Array<{ id: string; storagePath: string }>>`
         DELETE FROM media m WHERE m.id = ${params.id}
@@ -22,7 +23,10 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
           AND NOT EXISTS (SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenu' AND setting.value @> ${JSON.stringify({ items: [{ banner: { imageMediaId: params.id } }] })}::jsonb)
         RETURNING m.id, m."storagePath"
       `;
-      if (rows[0]) return { removed: rows[0], exists: true };
+      if (rows[0]) {
+        await writeAuditLog(tx, actor, { action: "media.deleted", entityType: "media", entityId: rows[0].id, changes: { deleted: { old: { storagePath: rows[0].storagePath }, new: null } } });
+        return { removed: rows[0], exists: true };
+      }
       const exists = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id = ${params.id} LIMIT 1`;
       return { removed: null, exists: exists.length > 0 };
     });

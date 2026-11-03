@@ -5,6 +5,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { requireRequestSession } from "@/lib/auth";
 import { uploadFilePath, uploadRoot } from "@/lib/admin-db";
+import { canViewTradeInPhoto } from "@/lib/trade-in-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,9 +14,12 @@ const mimeByExtension: Record<string, string> = { ".jpg": "image/jpeg", ".png": 
 
 export async function GET(request: Request) {
   try {
-    await requireRequestSession();
-    const requestedPath = new URL(request.url).searchParams.get("path") ?? "";
+    const session = await requireRequestSession();
+    const requestUrl = new URL(request.url);
+    const requestedPath = requestUrl.searchParams.get("path") ?? "";
     if (!/^\/uploads\/\d{4}\/\d{2}\/lead-[a-f0-9]{32}\.(?:jpg|png|webp|avif)$/.test(requestedPath)) return new NextResponse(null, { status: 404 });
+    const requestNumber = requestUrl.searchParams.get("request") ?? "";
+    if (!requestNumber || !(await canViewTradeInPhoto({ userId: session.userId, role: session.role }, requestNumber, requestedPath))) return new NextResponse(null, { status: 404 });
     const storagePath = requestedPath.slice(1);
     const file = uploadFilePath(storagePath);
     const [rootReal, fileReal, fileStat] = await Promise.all([realpath(uploadRoot()), realpath(file), stat(file)]);

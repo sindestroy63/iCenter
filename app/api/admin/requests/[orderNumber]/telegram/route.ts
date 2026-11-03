@@ -15,8 +15,11 @@ export async function POST(request: Request, context: { params: { orderNumber: s
       const allowed = await adminDb().$queryRaw<Array<{ allowed: number }>>`
         SELECT 1 AS allowed
         FROM order_attempts a
-        JOIN user_city_access grant_city ON grant_city."cityId"=a."cityId" AND grant_city."userId"=${session.userId}
         WHERE a."orderNumber"=${context.params.orderNumber}
+          AND EXISTS (SELECT 1 FROM users u WHERE u.id=${session.userId} AND u."isActive"=TRUE AND u.role::text='CITY_MANAGER'
+            AND (COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (
+              SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=a."cityId" AND grant_city."userId"=u.id
+            )))
         LIMIT 1
       `;
       if (!allowed.length) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });

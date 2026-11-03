@@ -6,6 +6,7 @@ import { cookies, headers } from "next/headers";
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { sameOrigin } from "@/lib/same-origin";
+import { writeAuditLog } from "@/lib/admin-audit";
 
 export { sameOrigin };
 
@@ -65,10 +66,13 @@ export async function getSession() {
   const tokenValue = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!tokenValue) return null;
   const client = db();
-  const rows = await client.$queryRaw<Array<{ sessionId: string; csrfToken: string; userId: string; email: string; name: string | null; firstName: string | null; lastName: string | null; avatarMediaId: string | null; role: string; isActive: boolean; mustChangePassword: boolean }>>`
+  const rows = await client.$queryRaw<Array<{ sessionId: string; csrfToken: string; userId: string; email: string; name: string | null; firstName: string | null; lastName: string | null; avatarMediaId: string | null; role: string; isActive: boolean; mustChangePassword: boolean; allCities: boolean; allCitiesCanManagePrices: boolean; allCitiesCanManageStock: boolean }>>`
     SELECT s.id AS "sessionId", s."csrfToken", u.id AS "userId", u.email, u.name,
       to_jsonb(u)->>'firstName' AS "firstName", to_jsonb(u)->>'lastName' AS "lastName", to_jsonb(u)->>'avatarMediaId' AS "avatarMediaId", u.role::text AS role, u."isActive",
-      COALESCE((to_jsonb(u)->>'mustChangePassword')::boolean, FALSE) AS "mustChangePassword"
+      COALESCE((to_jsonb(u)->>'mustChangePassword')::boolean, FALSE) AS "mustChangePassword",
+      COALESCE((to_jsonb(u)->>'allCities')::boolean, FALSE) AS "allCities",
+      COALESCE((to_jsonb(u)->>'allCitiesCanManagePrices')::boolean, FALSE) AS "allCitiesCanManagePrices",
+      COALESCE((to_jsonb(u)->>'allCitiesCanManageStock')::boolean, FALSE) AS "allCitiesCanManageStock"
     FROM sessions s JOIN users u ON u.id = s."userId"
     WHERE s.token = ${tokenValue} AND s."revokedAt" IS NULL AND s."expiresAt" > NOW()
     LIMIT 1
@@ -148,6 +152,7 @@ export async function changeOwnPassword(request: Request, currentPassword: strin
   await client.$transaction(async (tx) => {
     await tx.$executeRaw`UPDATE users SET "passwordHash"=${passwordHash}, "mustChangePassword"=FALSE, "updatedAt"=NOW() WHERE id=${session.userId}`;
     await tx.$executeRaw`UPDATE sessions SET "revokedAt"=NOW() WHERE "userId"=${session.userId} AND id<>${session.sessionId} AND "revokedAt" IS NULL`;
+    await writeAuditLog(tx, session, { action: "profile.password_changed", entityType: "user_profile", entityId: session.userId, changes: { changed: { old: false, new: true } } });
   });
   return session;
 }
@@ -155,7 +160,7 @@ export async function changeOwnPassword(request: Request, currentPassword: strin
 export function authErrorStatus(error: unknown) {
   if (!(error instanceof Error)) return 500;
   if (error.message === "UNAUTHORIZED") return 401;
-  if (["FORBIDDEN", "CSRF_INVALID"].includes(error.message)) return 403;
+  if (["FORBIDDEN", "CSRF_INVALID", "OWNER_CREATION_DISABLED"].includes(error.message)) return 403;
   if (error.message === "NOT_FOUND") return 404;
   if (["EMAIL_EXISTS", "LAST_ACTIVE_OWNER"].includes(error.message)) return 409;
   if (["PASSWORD_CHANGE_REQUIRED", "AUTH_SCHEMA_PATCH_REQUIRED"].includes(error.message)) return 503;

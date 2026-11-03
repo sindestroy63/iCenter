@@ -3,6 +3,7 @@ import argon2 from "argon2";
 import { z } from "zod";
 import { requireGlobalAdminMutation } from "@/lib/auth";
 import { adminDb } from "@/lib/admin-db";
+import { writeAuditLog } from "@/lib/admin-audit";
 
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
@@ -17,6 +18,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
       if (actor.role !== "OWNER" && users[0].role === "OWNER") throw new Error("FORBIDDEN");
       await tx.$executeRaw`UPDATE users SET "passwordHash"=${hash},"mustChangePassword"=TRUE,"updatedAt"=NOW() WHERE id=${params.id}`;
       await tx.$executeRaw`UPDATE sessions SET "revokedAt"=NOW() WHERE "userId"=${params.id} AND "revokedAt" IS NULL`;
+      await writeAuditLog(tx, actor, { action: "user.password_reset", entityType: "user", entityId: params.id, changes: { old: null, new: { mustChangePassword: true } } });
     });
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {

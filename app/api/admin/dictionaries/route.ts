@@ -4,6 +4,7 @@ import { requireDictionaryMutation, requireDictionarySession } from "@/lib/auth"
 import { adminDb, newId } from "@/lib/admin-db";
 import { DICTIONARY_REGISTRY, sortDictionaryOptions, validateOptionInput, type DictionaryCode } from "@/lib/product-dictionaries";
 import { catalogColorHex } from "@/lib/catalog-colors";
+import { auditDiff, getDictionarySnapshot, writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -65,7 +66,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    await requireDictionaryMutation(request);
+    const actor = await requireDictionaryMutation(request);
     const code = new URL(request.url).searchParams.get("code") ?? "";
     const body = await request.json();
     if (body?.kind === "definition") {
@@ -82,6 +83,7 @@ export async function POST(request: Request) {
           if (!type.length) throw new Error("INVALID_PRODUCT_TYPE");
           await tx.$executeRaw`INSERT INTO product_type_attributes ("productTypeId","definitionId",scope,"sortOrder") VALUES (${productTypeId},${id},'VARIANT',${definition.sortOrder})`;
         }
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "attribute_definition", entityId: id, changes: { old: null, new: { code: definition.code, name: definition.name, scope: definition.scope, valueKind: definition.valueKind, sortOrder: definition.sortOrder, isFilterable: definition.isFilterable, isActive: definition.isActive, productTypeIds: Array.from(new Set(definition.productTypeIds)) } }, metadata: { dictionary: "definition" } });
       });
       return NextResponse.json({ ok: true }, { status: 201 });
     }
@@ -97,14 +99,18 @@ export async function POST(request: Request) {
     await db.$transaction(async (tx) => {
       if (code === "productLine") {
         if (!value.brandId) throw new Error("BRAND_REQUIRED");
-        await tx.$executeRaw`INSERT INTO product_lines (id,"brandId","canonicalKey",name,"sortOrder","isActive") VALUES (${value.id ?? newId()},${value.brandId},${value.canonicalKey},${value.label},${value.sortOrder},${value.isActive})`;
+        const id = value.id ?? newId();
+        await tx.$executeRaw`INSERT INTO product_lines (id,"brandId","canonicalKey",name,"sortOrder","isActive") VALUES (${id},${value.brandId},${value.canonicalKey},${value.label},${value.sortOrder},${value.isActive})`;
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "productLine", entityId: id, changes: { old: null, new: { brandId: value.brandId, canonicalKey: value.canonicalKey, name: value.label, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { dictionary: code } });
         return;
       }
       if (code === "productModel") {
         if (!value.brandId || !value.globalProductTypeId) throw new Error("MODEL_REFERENCE_REQUIRED");
         const reference = await tx.$queryRaw<any[]>`SELECT 1 FROM global_product_types g JOIN global_product_type_brands link ON link."productTypeId"=g.id AND link."brandId"=${value.brandId} WHERE g.id=${value.globalProductTypeId} AND g."isActive"=TRUE LIMIT 1`;
         if (!reference.length) throw new Error("MODEL_REFERENCE_INVALID");
-        await tx.$executeRaw`INSERT INTO product_models (id,name,"brandId","globalProductTypeId","isActive") VALUES (${value.id ?? newId()},${value.label},${value.brandId},${value.globalProductTypeId},${value.isActive})`;
+        const id = value.id ?? newId();
+        await tx.$executeRaw`INSERT INTO product_models (id,name,"brandId","globalProductTypeId","isActive") VALUES (${id},${value.label},${value.brandId},${value.globalProductTypeId},${value.isActive})`;
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "productModel", entityId: id, changes: { old: null, new: { name: value.label, brandId: value.brandId, globalProductTypeId: value.globalProductTypeId, isActive: value.isActive } }, metadata: { dictionary: code } });
         return;
       }
       if (code === "productType") {
@@ -112,18 +118,23 @@ export async function POST(request: Request) {
         const id = value.id ?? newId();
         await tx.$executeRaw`INSERT INTO global_product_types (id,"canonicalKey",name,"sortOrder","isActive") VALUES (${id},${value.canonicalKey},${value.label},${value.sortOrder},${value.isActive})`;
         for (const brandId of value.brandIds) await tx.$executeRaw`INSERT INTO global_product_type_brands ("productTypeId","brandId") VALUES (${id},${brandId})`;
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "productType", entityId: id, changes: { old: null, new: { canonicalKey: value.canonicalKey, name: value.label, sortOrder: value.sortOrder, isActive: value.isActive, brandIds: value.brandIds } }, metadata: { dictionary: code } });
         return;
       }
       if (code === "brand") {
         const slug = value.canonicalKey.replace(/^brand:/, "");
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error("INVALID_CANONICAL_KEY");
-        await tx.$executeRaw`INSERT INTO brands (id,name,slug,"sortOrder","isActive","updatedAt") VALUES (${value.id ?? newId()},${value.label},${slug},${value.sortOrder},${value.isActive},NOW())`;
+        const id = value.id ?? newId();
+        await tx.$executeRaw`INSERT INTO brands (id,name,slug,"sortOrder","isActive","updatedAt") VALUES (${id},${value.label},${slug},${value.sortOrder},${value.isActive},NOW())`;
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "brand", entityId: id, changes: { old: null, new: { name: value.label, slug, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { dictionary: code } });
         return;
       }
       if (code === "color") {
         const slug = value.canonicalKey.replace(/^color:/, "");
         if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error("INVALID_CANONICAL_KEY");
-        await tx.$executeRaw`INSERT INTO colors (id,name,"nameRu",slug,"hexPrimary","sortOrder","isActive","updatedAt") VALUES (${value.id ?? newId()},${value.label},${value.nameRu?.trim() || null},${slug},${value.hex ?? null},${value.sortOrder},${value.isActive},NOW())`;
+        const id = value.id ?? newId();
+        await tx.$executeRaw`INSERT INTO colors (id,name,"nameRu",slug,"hexPrimary","sortOrder","isActive","updatedAt") VALUES (${id},${value.label},${value.nameRu?.trim() || null},${slug},${value.hex ?? null},${value.sortOrder},${value.isActive},NOW())`;
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "color", entityId: id, changes: { old: null, new: { name: value.label, nameRu: value.nameRu?.trim() || null, slug, hexPrimary: value.hex ?? null, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { dictionary: code } });
         return;
       }
       const definition = await tx.$queryRaw<any[]>`SELECT id FROM attribute_definitions WHERE code=${code} LIMIT 1`;
@@ -134,6 +145,7 @@ export async function POST(request: Request) {
       const optionId = value.id ?? newId();
       await tx.$executeRaw`INSERT INTO attribute_options (id,"definitionId","canonicalKey",label,"sortOrder","isActive") VALUES (${optionId},${definition[0].id},${value.canonicalKey},${value.label},${value.sortOrder},${value.isActive})`;
       for (let index = 0; index < value.aliases.length; index++) { const alias = value.aliases[index]; await tx.$executeRaw`INSERT INTO attribute_option_aliases (id,"definitionId","optionId","aliasKey","aliasLabel") VALUES (${newId()},${definition[0].id},${optionId},${`${code}:${alias.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `alias-${index + 1}`}`},${alias})`; }
+      await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "attribute_option", entityId: optionId, changes: { old: null, new: { dictionary: code, canonicalKey: value.canonicalKey, label: value.label, aliases: value.aliases, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { dictionary: code } });
     });
     return NextResponse.json({ ok: true }, { status: 201 });
   } catch (error) { return errorResponse(error); }
@@ -141,21 +153,26 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    await requireDictionaryMutation(request);
+    const actor = await requireDictionaryMutation(request);
     const body = await request.json() as { kind?: string; code?: string; id?: string; isActive?: boolean; label?: string; name?: string; nameRu?: string | null; sortOrder?: number; brandIds?: string[]; brandId?: string; globalProductTypeId?: string; hex?: string | null; isFilterable?: boolean; productTypeIds?: string[] };
     if (body.kind === "definition") {
       if (!body.id || typeof body.isActive !== "boolean" || (body.name !== undefined && (!body.name.trim() || body.name.trim().length > 180)) || (body.sortOrder !== undefined && !Number.isInteger(body.sortOrder)) || (body.productTypeIds !== undefined && (!Array.isArray(body.productTypeIds) || body.productTypeIds.length > 100))) return NextResponse.json({ error: "INVALID_ATTRIBUTE_DEFINITION" }, { status: 400 });
+      const definitionId = body.id;
       const db = adminDb();
       await db.$transaction(async (tx) => {
-        const rows = await tx.$queryRaw<any[]>`SELECT id,code FROM attribute_definitions WHERE id=${body.id} AND scope='VARIANT' LIMIT 1`;
+        const rows = await tx.$queryRaw<any[]>`SELECT id,code FROM attribute_definitions WHERE id=${definitionId} AND scope='VARIANT' LIMIT 1`;
         if (!rows[0]) throw new Error("NOT_FOUND");
+        const before = await getDictionarySnapshot(tx, "definition", definitionId);
         if (isFixedDictionary(rows[0].code) || reservedAttributeCodes.has(rows[0].code)) throw new Error("RESERVED_ATTRIBUTE_CODE");
-        await tx.$executeRaw`UPDATE attribute_definitions SET name=COALESCE(${body.name?.trim() ?? null},name), "isActive"=${body.isActive}, "sortOrder"=COALESCE(${body.sortOrder ?? null},"sortOrder"), "isFilterable"=COALESCE(${body.isFilterable ?? null},"isFilterable"), "updatedAt"=NOW() WHERE id=${body.id}`;
+        await tx.$executeRaw`UPDATE attribute_definitions SET name=COALESCE(${body.name?.trim() ?? null},name), "isActive"=${body.isActive}, "sortOrder"=COALESCE(${body.sortOrder ?? null},"sortOrder"), "isFilterable"=COALESCE(${body.isFilterable ?? null},"isFilterable"), "updatedAt"=NOW() WHERE id=${definitionId}`;
         for (const productTypeId of Array.from(new Set(body.productTypeIds ?? []))) {
           const type = await tx.$queryRaw<any[]>`SELECT id FROM product_types WHERE id=${productTypeId} LIMIT 1`;
           if (!type.length) throw new Error("INVALID_PRODUCT_TYPE");
-          await tx.$executeRaw`INSERT INTO product_type_attributes ("productTypeId","definitionId",scope,"sortOrder") VALUES (${productTypeId},${body.id},'VARIANT',${body.sortOrder ?? 0}) ON CONFLICT ("productTypeId","definitionId") DO NOTHING`;
+          await tx.$executeRaw`INSERT INTO product_type_attributes ("productTypeId","definitionId",scope,"sortOrder") VALUES (${productTypeId},${definitionId},'VARIANT',${body.sortOrder ?? 0}) ON CONFLICT ("productTypeId","definitionId") DO NOTHING`;
         }
+        const after = await getDictionarySnapshot(tx, "definition", definitionId);
+        const changes = auditDiff(before, after);
+        if (changes) await writeAuditLog(tx, actor, { action: "dictionary.updated", entityType: "attribute_definition", entityId: definitionId, changes, metadata: { dictionary: "definition" } });
       });
       return NextResponse.json({ ok: true });
     }
@@ -163,9 +180,12 @@ export async function PATCH(request: Request) {
     if (body.label !== undefined && (!body.label.trim() || body.label.trim().length > 180)) return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
     if (body.nameRu !== undefined && body.nameRu !== null && body.nameRu.trim().length > 180) return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
     if (body.hex !== undefined && body.hex !== null && !/^#[0-9A-Fa-f]{6}$/.test(body.hex)) return NextResponse.json({ error: "INVALID_DICTIONARY_VALUE" }, { status: 400 });
+    const dictionaryCode = body.code;
+    const dictionaryId = body.id;
     if (legacyCodes.has(body.code)) return NextResponse.json({ error: "LEGACY_DICTIONARY_READ_ONLY" }, { status: 409 });
     const db = adminDb();
     await db.$transaction(async (tx) => {
+      const before = await getDictionarySnapshot(tx, dictionaryCode, dictionaryId);
       if (body.code === "brand") {
         if (!body.isActive) { const used = await tx.$queryRaw<any[]>`SELECT 1 FROM products WHERE "brandId"=${body.id} UNION ALL SELECT 1 FROM product_types WHERE "brandId"=${body.id} LIMIT 1`; if (used.length) throw new Error("USED_VALUE"); }
         await tx.$executeRaw`UPDATE brands SET "isActive"=${body.isActive}, name=COALESCE(${body.label ?? null},name), "sortOrder"=COALESCE(${body.sortOrder ?? null},"sortOrder"), "updatedAt"=NOW() WHERE id=${body.id}`;
@@ -200,6 +220,9 @@ export async function PATCH(request: Request) {
         if (!body.isActive) { const used = await tx.$queryRaw<any[]>`SELECT 1 FROM product_attribute_values WHERE "optionId"=${body.id} UNION ALL SELECT 1 FROM product_variant_attribute_values WHERE "optionId"=${body.id} LIMIT 1`; if (used.length) throw new Error("USED_VALUE"); }
         await tx.$executeRaw`UPDATE attribute_options SET "isActive"=${body.isActive}, label=COALESCE(${body.label ?? null},label), "sortOrder"=COALESCE(${body.sortOrder ?? null},"sortOrder"), "updatedAt"=NOW() WHERE id=${body.id}`;
       }
+      const after = await getDictionarySnapshot(tx, dictionaryCode, dictionaryId);
+      const changes = auditDiff(before, after);
+      if (changes) await writeAuditLog(tx, actor, { action: "dictionary.updated", entityType: dictionaryCode === "productType" ? "productType" : dictionaryCode, entityId: dictionaryId, changes, metadata: { dictionary: dictionaryCode } });
     });
     return NextResponse.json({ ok: true });
   } catch (error) { return errorResponse(error); }
@@ -207,7 +230,7 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    await requireDictionaryMutation(request);
+    const actor = await requireDictionaryMutation(request);
     const url = new URL(request.url);
     const code = url.searchParams.get("code") ?? "";
     const id = url.searchParams.get("id") ?? "";
@@ -216,6 +239,7 @@ export async function DELETE(request: Request) {
     }
     const db = adminDb();
     await db.$transaction(async (tx) => {
+      const before = await getDictionarySnapshot(tx, code, id);
       let used: any[] = [];
       let deleted = 0;
       if (code === "brand") {
@@ -239,6 +263,7 @@ export async function DELETE(request: Request) {
       }
       if (used.length) throw new Error("USED_VALUE");
       if (!deleted) throw new Error("NOT_FOUND");
+      await writeAuditLog(tx, actor, { action: "dictionary.deleted", entityType: code === "productType" ? "productType" : code === "productLine" ? "productLine" : code === "productModel" ? "productModel" : code === "brand" ? "brand" : code === "color" ? "color" : "attribute_option", entityId: id, changes: { deleted: { old: before, new: null } }, metadata: { dictionary: code } });
     });
     return NextResponse.json({ ok: true });
   } catch (error) { return errorResponse(error); }

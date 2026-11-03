@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 const placements = ["home", "home_brand_apple", "home_brand_samsung", "home_brand_dyson", "home_brand_playstation", "product_trade_in"] as const;
@@ -33,7 +34,7 @@ export async function PATCH(request: Request) { return save(request, true); }
 
 async function save(request: Request, update: boolean) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success || (update && parsed.data.id === undefined) || (!update && parsed.data.id !== undefined && parsed.data.id !== "")) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
     const submitted = parsed.data;
@@ -52,7 +53,13 @@ async function save(request: Request, update: boolean) {
     const saved = await db.$transaction(async (tx) => {
       if (update) {
         const id = value.id!;
+        const before = (await tx.$queryRaw<any[]>`SELECT placement,title,subtitle,"linkUrl","linkText","imageMediaId","sortOrder","isActive" FROM banners WHERE id=${id}`)[0];
         const count = await tx.$executeRaw`UPDATE banners SET placement=${value.placement},title=${value.title},subtitle=${value.subtitle},"linkUrl"=${value.linkUrl},"linkText"=${value.linkText},"imageMediaId"=${value.imageMediaId},"sortOrder"=${value.sortOrder},"isActive"=${value.isActive},"updatedAt"=NOW() WHERE id=${id}`;
+        if (count && before) {
+          const after = (await tx.$queryRaw<any[]>`SELECT placement,title,subtitle,"linkUrl","linkText","imageMediaId","sortOrder","isActive" FROM banners WHERE id=${id}`)[0];
+          const changes = auditDiff(before, after);
+          if (changes) await writeAuditLog(tx, actor, { action: "banner.updated", entityType: "banner", entityId: id, changes, metadata: { placement: value.placement } });
+        }
         return { id, created: false, found: count > 0 };
       }
 
@@ -60,11 +67,16 @@ async function save(request: Request, update: boolean) {
       const existing = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM banners WHERE placement=${value.placement} ORDER BY "isActive" DESC,"sortOrder",id LIMIT 1 FOR UPDATE`;
       const id = existing[0]?.id ?? newId();
       if (existing[0]) {
+        const before = (await tx.$queryRaw<any[]>`SELECT placement,title,subtitle,"linkUrl","linkText","imageMediaId","sortOrder","isActive" FROM banners WHERE id=${id}`)[0];
         await tx.$executeRaw`UPDATE banners SET title=${value.title},subtitle=${value.subtitle},"linkUrl"=${value.linkUrl},"linkText"=${value.linkText},"imageMediaId"=${value.imageMediaId},"sortOrder"=${value.sortOrder},"isActive"=${value.isActive},"updatedAt"=NOW() WHERE id=${id}`;
+        const after = (await tx.$queryRaw<any[]>`SELECT placement,title,subtitle,"linkUrl","linkText","imageMediaId","sortOrder","isActive" FROM banners WHERE id=${id}`)[0];
+        const changes = auditDiff(before, after);
+        if (changes) await writeAuditLog(tx, actor, { action: "banner.updated", entityType: "banner", entityId: id, changes, metadata: { placement: value.placement } });
         return { id, created: false, found: true };
       }
 
       await tx.$executeRaw`INSERT INTO banners (id,placement,title,subtitle,"linkUrl","linkText","imageMediaId","sortOrder","isActive","createdAt","updatedAt") VALUES (${id},${value.placement},${value.title},${value.subtitle},${value.linkUrl},${value.linkText},${value.imageMediaId},${value.sortOrder},${value.isActive},NOW(),NOW())`;
+      await writeAuditLog(tx, actor, { action: "banner.created", entityType: "banner", entityId: id, changes: { old: null, new: { placement: value.placement, title: value.title, subtitle: value.subtitle, linkUrl: value.linkUrl, linkText: value.linkText, imageMediaId: value.imageMediaId, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { placement: value.placement } });
       return { id, created: true, found: true };
     });
     if (!saved.found) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });

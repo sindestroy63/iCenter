@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { adminDb } from "@/lib/admin-db";
 import { authErrorStatus, requireAdminMutation, requireAdminSession } from "@/lib/auth";
+import { getCityAccess } from "@/lib/admin-city-access";
+import { auditInventoryChanges, type InventoryAuditRow } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -26,13 +28,18 @@ export async function GET() {
       ? await db.$queryRaw<any[]>`
           SELECT p.id AS "productId",p.name AS "productName",v.id AS "variantId",v.sku,v.label,
             i.id AS "inventoryId",i."cityId",c.name AS "cityName",i.price::text AS price,i.stock,
-            i.availability::text AS availability,g."canManagePrices",g."canManageStock"
-          FROM user_city_access g
-          JOIN cities c ON c.id=g."cityId" AND c."isActive"=TRUE
+            i.availability::text AS availability,
+            CASE WHEN COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE) THEN COALESCE((to_jsonb(u)->>'allCitiesCanManagePrices')::boolean,FALSE) ELSE COALESCE(g."canManagePrices",FALSE) END AS "canManagePrices",
+            CASE WHEN COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE) THEN COALESCE((to_jsonb(u)->>'allCitiesCanManageStock')::boolean,FALSE) ELSE COALESCE(g."canManageStock",FALSE) END AS "canManageStock"
+          FROM users u
+          JOIN cities c ON c."isActive"=TRUE
+          LEFT JOIN user_city_access g ON g."userId"=u.id AND g."cityId"=c.id
           JOIN inventory i ON i."cityId"=c.id AND i."isActive"=TRUE
           JOIN product_variants v ON v.id=i."variantId" AND v."isActive"=TRUE
           JOIN products p ON p.id=v."productId"
-          WHERE g."userId"=${session.userId} ORDER BY c.name,p.name,v.sku
+          WHERE u.id=${session.userId} AND u."isActive"=TRUE AND u.role::text='CITY_MANAGER'
+            AND (COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE OR g."cityId" IS NOT NULL)
+          ORDER BY c.name,p.name,v.sku
         `
       : await db.$queryRaw<any[]>`
           SELECT p.id AS "productId",p.name AS "productName",v.id AS "variantId",v.sku,v.label,
@@ -54,17 +61,17 @@ export async function PATCH(request: Request) {
     const value = parsed.data;
     const db = adminDb();
     await db.$transaction(async (tx) => {
-      const grant = session.role === "CITY_MANAGER"
-        ? await tx.$queryRaw<any[]>`SELECT "canManagePrices","canManageStock" FROM user_city_access WHERE "userId"=${session.userId} AND "cityId"=${value.cityId} FOR UPDATE`
-        : [{ canManagePrices: true, canManageStock: true }];
-      if (!grant.length) throw new Error("FORBIDDEN");
-      if (value.price !== undefined && !grant[0].canManagePrices) throw new Error("FORBIDDEN");
-      if ((value.stock !== undefined || value.availability !== undefined) && !grant[0].canManageStock) throw new Error("FORBIDDEN");
-      const item = await tx.$queryRaw<any[]>`SELECT i.id FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i."variantId"=${value.variantId} AND i."cityId"=${value.cityId} AND i."isActive"=TRUE AND v."isActive"=TRUE LIMIT 1 FOR UPDATE OF i`;
+      const grant = await getCityAccess(tx, session.userId, value.cityId);
+      if (!grant.allowed) throw new Error("FORBIDDEN");
+      if (value.price !== undefined && !grant.canManagePrices) throw new Error("FORBIDDEN");
+      if ((value.stock !== undefined || value.availability !== undefined) && !grant.canManageStock) throw new Error("FORBIDDEN");
+      const item = await tx.$queryRaw<InventoryAuditRow[]>`SELECT i.id,i."variantId",i."cityId",v."productId",i.price::text AS price,i."oldPrice"::text AS "oldPrice",i.stock,i.availability::text AS availability,i."allowPreorder",i."deliveryTime",i."isActive" FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i."variantId"=${value.variantId} AND i."cityId"=${value.cityId} AND i."isActive"=TRUE AND v."isActive"=TRUE LIMIT 1 FOR UPDATE OF i`;
       if (!item.length) throw new Error("NOT_FOUND");
       if (value.price !== undefined) await tx.$executeRaw`UPDATE inventory SET price=${value.price},"updatedAt"=NOW() WHERE id=${item[0].id}`;
       if (value.stock !== undefined) await tx.$executeRaw`UPDATE inventory SET stock=${value.stock},"updatedAt"=NOW() WHERE id=${item[0].id}`;
       if (value.availability !== undefined) await tx.$executeRaw`UPDATE inventory SET availability=${value.availability}::"AvailabilityStatus","updatedAt"=NOW() WHERE id=${item[0].id}`;
+      const after = await tx.$queryRaw<InventoryAuditRow[]>`SELECT i.id,i."variantId",i."cityId",v."productId",i.price::text AS price,i."oldPrice"::text AS "oldPrice",i.stock,i.availability::text AS availability,i."allowPreorder",i."deliveryTime",i."isActive" FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i.id=${item[0].id}`;
+      await auditInventoryChanges(tx, session, item, after);
     });
     return NextResponse.json({ ok: true });
   } catch (error) { return failure(error); }

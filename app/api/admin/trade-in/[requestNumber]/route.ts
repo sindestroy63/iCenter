@@ -9,7 +9,7 @@ export async function PATCH(request: Request, { params }: { params: { requestNum
     const session = await requireAdminMutation(request);
     const body = await request.json().catch(() => null) as { status?: unknown } | null;
     if (!body || typeof body.status !== "string") return NextResponse.json({ error: "INVALID_STATUS" },{ status: 400 });
-    const status = await updateTradeInStatus({ userId: session.userId,role: session.role },params.requestNumber,body.status);
+    const status = await updateTradeInStatus({ userId: session.userId,role: session.role, sessionId: session.sessionId, name: session.name },params.requestNumber,body.status);
     return NextResponse.json({ status },{ headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

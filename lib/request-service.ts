@@ -6,6 +6,7 @@ import { z } from "zod";
 import { decryptPii, encryptPii, requestHash } from "@/lib/request-pii";
 import { notifyRequest } from "@/lib/telegram-requests";
 import { dualConsentEvidence, PERSONAL_DATA_CONSENT_VERSION, type ConsentEvidence } from "@/lib/consent-evidence";
+import { writeAuditLog } from "@/lib/admin-audit";
 
 declare global { var requestPrisma: PrismaClient | undefined; }
 
@@ -131,37 +132,36 @@ export class RequestError extends Error {
   constructor(public code: string, public status: number) { super(code); }
 }
 
-export type RequestViewer = { userId: string; role: string };
+export type RequestViewer = { userId: string; role: string; sessionId?: string; name?: string | null };
 const requestStatuses = new Set(["NEW", "PROCESSING", "CONFIRMED", "SHIPPING", "COMPLETED", "CANCELLED"]);
 
 export async function updateRequestStatus(viewer: RequestViewer, identifier: string, status: string) {
   if (!["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"].includes(viewer.role)) throw new RequestError("FORBIDDEN", 403);
   if (!requestStatuses.has(status)) throw new RequestError("INVALID_STATUS", 400);
   const client = db();
-  const updated = await client.$queryRaw<Array<{ status: string }>>`
-    UPDATE orders o SET status=${status}::"OrderStatus", "updatedAt"=NOW()
-    WHERE (o.id=${identifier} OR EXISTS (SELECT 1 FROM order_attempts a WHERE a."orderId"=o.id AND a."orderNumber"=${identifier}))
-      AND (${viewer.role !== "CITY_MANAGER"} OR EXISTS (
-        SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=o."cityId" AND grant_city."userId"=${viewer.userId}
-      ))
-    RETURNING o.status::text AS status
-  `;
-  if (updated[0]) return updated[0].status;
-  const found = await client.$queryRaw<Array<{ id: string }>>`
-    SELECT o.id FROM orders o
-    WHERE o.id=${identifier} OR EXISTS (SELECT 1 FROM order_attempts a WHERE a."orderId"=o.id AND a."orderNumber"=${identifier})
-    LIMIT 1
-  `;
-  if (found.length) throw new RequestError("FORBIDDEN", 403);
-  throw new RequestError("NOT_FOUND", 404);
+  return client.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ id: string; status: string; cityId: string }>>`
+      SELECT o.id,o.status::text AS status,o."cityId" FROM orders o
+      WHERE (o.id=${identifier} OR EXISTS (SELECT 1 FROM order_attempts a WHERE a."orderId"=o.id AND a."orderNumber"=${identifier}))
+        AND (${viewer.role !== "CITY_MANAGER"} OR EXISTS (SELECT 1 FROM users u WHERE u.id=${viewer.userId} AND u."isActive"=TRUE AND u.role::text='CITY_MANAGER' AND (COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (SELECT 1 FROM user_city_access g WHERE g."userId"=u.id AND g."cityId"=o."cityId"))))
+      LIMIT 1 FOR UPDATE OF o`;
+    if (!rows[0]) {
+      const found = await tx.$queryRaw<Array<{ id: string }>>`SELECT o.id FROM orders o WHERE o.id=${identifier} OR EXISTS (SELECT 1 FROM order_attempts a WHERE a."orderId"=o.id AND a."orderNumber"=${identifier}) LIMIT 1`;
+      if (found.length) throw new RequestError("FORBIDDEN", 403);
+      throw new RequestError("NOT_FOUND", 404);
+    }
+    await tx.$executeRaw`UPDATE orders SET status=${status}::"OrderStatus", "updatedAt"=NOW() WHERE id=${rows[0].id}`;
+    if (viewer.sessionId) await writeAuditLog(tx, { ...viewer, sessionId: viewer.sessionId }, { action: "order.status_updated", entityType: "order", entityId: rows[0].id, changes: { status: { old: rows[0].status, new: status } }, metadata: { cityId: rows[0].cityId } });
+    return status;
+  });
 }
 
 export async function deleteRequest(viewer: RequestViewer, identifier: string) {
   if (viewer.role !== "OWNER") throw new RequestError("FORBIDDEN", 403);
   const client = db();
   await client.$transaction(async (tx) => {
-    const found = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT o.id FROM orders o
+    const found = await tx.$queryRaw<Array<{ id: string; cityId: string; status: string }>>`
+      SELECT o.id,o."cityId",o.status::text AS status FROM orders o
       WHERE o.id=${identifier} OR EXISTS (
         SELECT 1 FROM order_attempts a WHERE a."orderId"=o.id AND a."orderNumber"=${identifier}
       )
@@ -169,6 +169,7 @@ export async function deleteRequest(viewer: RequestViewer, identifier: string) {
     `;
     const order = found[0];
     if (!order) throw new RequestError("NOT_FOUND", 404);
+    if (viewer.sessionId) await writeAuditLog(tx, { ...viewer, sessionId: viewer.sessionId }, { action: "order.deleted", entityType: "order", entityId: order.id, changes: { deleted: { old: true, new: null } }, metadata: { cityId: order.cityId, status: order.status } });
     await tx.$executeRaw`DELETE FROM order_attempts WHERE "orderId"=${order.id}`;
     await tx.$executeRaw`DELETE FROM order_items WHERE "orderId"=${order.id}`;
     await tx.$executeRaw`DELETE FROM orders WHERE id=${order.id}`;
@@ -182,10 +183,10 @@ export async function listRequests(viewer: RequestViewer) {
     ? await client.$queryRaw<any[]>`
         SELECT o.id,o."createdAt",c.name AS city,o."totalAmount",o."encryptedPiiPayload",o."customerName",o."customerPhone",o."contactMethod",o."deliveryType",o.comment AS "legacyComment",o.status::text AS "orderStatus",a."orderNumber",a."itemCount",
           COALESCE(json_agg(json_build_object('name',oi."productNameSnapshot",'sku',oi."skuSnapshot",'variant',oi."variantSnapshot",'quantity',oi.quantity,'price',oi.price)) FILTER (WHERE oi.id IS NOT NULL),'[]') AS items
-        FROM orders o JOIN cities c ON c.id=o."cityId" JOIN user_city_access grant_city ON grant_city."cityId"=c.id AND grant_city."userId"=${viewer.userId}
+        FROM orders o JOIN cities c ON c.id=o."cityId"
         LEFT JOIN order_attempts a ON a."orderId"=o.id
         LEFT JOIN order_items oi ON oi."orderId"=o.id
-        WHERE o."encryptedPiiPayload" IS NOT NULL
+        WHERE o."encryptedPiiPayload" IS NOT NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id=${viewer.userId} AND u."isActive"=TRUE AND u.role::text='CITY_MANAGER' AND (COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (SELECT 1 FROM user_city_access g WHERE g."userId"=u.id AND g."cityId"=o."cityId")))
         GROUP BY o.id,c.name,a."orderNumber",a."itemCount",o.status
         ORDER BY o."createdAt" DESC LIMIT 200
       `
@@ -217,7 +218,7 @@ export async function getRequestDashboard(viewer: RequestViewer) {
         COALESCE(SUM(o."totalAmount"),0)::text AS amount
       FROM orders o
       WHERE (${!cityManager} OR EXISTS (
-        SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=o."cityId" AND grant_city."userId"=${viewer.userId}
+        SELECT 1 FROM users viewer_user WHERE viewer_user.id=${viewer.userId} AND viewer_user."isActive"=TRUE AND viewer_user.role::text='CITY_MANAGER' AND (COALESCE((to_jsonb(viewer_user)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=o."cityId" AND grant_city."userId"=${viewer.userId}))
       ))
     `,
     client.$queryRaw<any[]>`
@@ -228,7 +229,7 @@ export async function getRequestDashboard(viewer: RequestViewer) {
         SELECT a."orderNumber" FROM order_attempts a WHERE a."orderId"=o.id ORDER BY a."createdAt" DESC LIMIT 1
       ) latest ON TRUE
       WHERE (${!cityManager} OR EXISTS (
-        SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=o."cityId" AND grant_city."userId"=${viewer.userId}
+        SELECT 1 FROM users viewer_user WHERE viewer_user.id=${viewer.userId} AND viewer_user."isActive"=TRUE AND viewer_user.role::text='CITY_MANAGER' AND (COALESCE((to_jsonb(viewer_user)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=o."cityId" AND grant_city."userId"=${viewer.userId}))
       ))
       ORDER BY o."createdAt" DESC LIMIT 5
     `,

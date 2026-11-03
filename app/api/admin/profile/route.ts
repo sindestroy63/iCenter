@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdminMutation, requireAdminSession } from "@/lib/auth";
 import { adminDb, newId, uploadFilePath, uploadRoot } from "@/lib/admin-db";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -25,7 +26,11 @@ export async function GET() {
     `;
     if (!rows[0]) return NextResponse.json({ error: "PROFILE_NOT_FOUND" }, { status: 404 });
     const cities = await adminDb().$queryRaw<Array<{ id: string; name: string }>>`
-      SELECT c.id,c.name FROM user_city_access g JOIN cities c ON c.id=g."cityId" WHERE g."userId"=${session.userId} ORDER BY c.name
+      SELECT c.id,c.name FROM cities c
+      WHERE c."isActive"=TRUE AND (
+        EXISTS (SELECT 1 FROM users u WHERE u.id=${session.userId} AND COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE)
+        OR EXISTS (SELECT 1 FROM user_city_access g WHERE g."userId"=${session.userId} AND g."cityId"=c.id)
+      ) ORDER BY c.name
     `;
     const user = rows[0];
     return NextResponse.json({ data: { firstName: user.firstName, lastName: user.lastName, legacyName: user.name, email: user.email, role: session.role, cities, avatarMediaId: user.avatarMediaId, avatarUrl: avatarUrl(user.avatarPath) } }, { headers: { "cache-control": "no-store" } });
@@ -96,6 +101,10 @@ export async function PATCH(request: Request) {
 
     const client = adminDb();
     const saved = await client.$transaction(async (tx) => {
+      const before = (await tx.$queryRaw<Array<{ firstName: string | null; lastName: string | null; avatarMediaId: string | null }>>`
+        SELECT "firstName","lastName","avatarMediaId" FROM users WHERE id=${session.userId} LIMIT 1
+      `)[0];
+      if (!before) throw new Error("PROFILE_NOT_FOUND");
       if (newMedia) {
         await tx.$executeRaw`
           INSERT INTO media (id,filename,"storagePath","mimeType","fileSize",alt,"uploadedByUserId")
@@ -115,6 +124,13 @@ export async function PATCH(request: Request) {
         FROM users u LEFT JOIN media m ON m.id=u."avatarMediaId" AND m."mimeType" IN ('image/jpeg','image/png','image/webp') WHERE u.id=${session.userId} LIMIT 1
       `;
       if (!rows[0]) throw new Error("PROFILE_NOT_FOUND");
+      const profileChanges = auditDiff(
+        { firstName: before.firstName, lastName: before.lastName },
+        { firstName: rows[0].firstName, lastName: rows[0].lastName },
+      );
+      if (profileChanges) await writeAuditLog(tx, session, { action: "profile.updated", entityType: "user_profile", entityId: session.userId, changes: profileChanges });
+      const avatarChanges = auditDiff(before.avatarMediaId, rows[0].avatarMediaId);
+      if (avatarChanges) await writeAuditLog(tx, session, { action: "profile.avatar_updated", entityType: "user_profile", entityId: session.userId, changes: { avatarMediaId: avatarChanges } });
       return rows[0];
     });
     return NextResponse.json({ data: { ...saved, avatarUrl: avatarUrl(saved.avatarPath) } }, { headers: { "cache-control": "no-store" } });

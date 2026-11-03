@@ -3,7 +3,9 @@ import { PrismaClient } from "@prisma/client";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 
-declare global { var adminPrisma: PrismaClient | undefined; }
+declare global {
+  var adminPrisma: PrismaClient | undefined;
+}
 
 export function adminDb() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not configured");

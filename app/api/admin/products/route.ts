@@ -5,6 +5,7 @@ import {
   requireGlobalAdminSession,
 } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { auditInventoryChanges, getProductAuditSnapshot, getProductInventorySnapshot, productAuditChanges, writeAuditLog } from "@/lib/admin-audit";
 import { saveImages, saveVariants } from "@/lib/admin-product-write";
 import { allocateProductSlug, parseSlugAliases, productSlugBase as slugFromName } from "@/lib/product-slug";
 
@@ -315,7 +316,7 @@ async function syncRelatedProducts(
   }
 }
 async function uniqueSlug(tx: any, name: string, excludeId?: string) {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('icenter-product-slugs', 0))`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('icenter-product-slugs', 0))`;
   const aliasRows = await tx.$queryRaw<any[]>`SELECT value FROM settings WHERE key='products.slugAliases' LIMIT 1`;
   const aliases = parseSlugAliases(aliasRows[0]?.value);
   return allocateProductSlug(name, async (candidate) => {
@@ -327,7 +328,7 @@ async function uniqueSlug(tx: any, name: string, excludeId?: string) {
 }
 
 async function preserveSlugAlias(tx: any, oldSlug: string, productId: string) {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended('icenter-product-slugs', 0))`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('icenter-product-slugs', 0))`;
   const rows = await tx.$queryRaw<any[]>`SELECT value FROM settings WHERE key='products.slugAliases' LIMIT 1`;
   const aliases = parseSlugAliases(rows[0]?.value).filter((alias) => alias.slug !== oldSlug);
   aliases.push({ slug: oldSlug, productId });
@@ -825,6 +826,9 @@ export async function POST(request: Request) {
         );
         await saveImages(tx, id, product.images);
         await syncRelatedProducts(tx, id, product.relatedProductIds);
+        const after = await getProductAuditSnapshot(tx, id);
+        await writeAuditLog(tx, session, { action: "product.created", entityType: "product", entityId: id, changes: { old: null, new: after } });
+        await auditInventoryChanges(tx, session, [], await getProductInventorySnapshot(tx, id));
       },
       { maxWait: 10000, timeout: 30000 },
     );
@@ -863,6 +867,8 @@ export async function PATCH(request: Request) {
           any[]
         >`SELECT name,slug FROM products WHERE id=${productId} LIMIT 1`;
         if (!current.length) throw new Error("NOT_FOUND");
+        const before = await getProductAuditSnapshot(tx, productId);
+        const inventoryBefore = await getProductInventorySnapshot(tx, productId);
         const [brand, type, category, line] = await Promise.all([
           tx.$queryRaw<
             any[]
@@ -897,6 +903,9 @@ export async function PATCH(request: Request) {
         await syncDictionaryLinks(tx, productId, product.variants, product);
         await saveImages(tx, productId, product.images);
         await syncRelatedProducts(tx, productId, product.relatedProductIds);
+        const after = await getProductAuditSnapshot(tx, productId);
+        await writeAuditLog(tx, session, { action: "product.updated", entityType: "product", entityId: productId, changes: productAuditChanges(before, after) });
+        await auditInventoryChanges(tx, session, inventoryBefore, await getProductInventorySnapshot(tx, productId));
       },
       { maxWait: 10000, timeout: 30000 },
     );

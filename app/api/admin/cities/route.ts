@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -56,7 +57,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const parsed = createSchema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_CITY" }, { status: 400 });
     const value = parsed.data;
@@ -67,6 +68,7 @@ export async function POST(request: Request) {
       if (duplicate.length) throw new Error("DUPLICATE_CITY");
       const order = await tx.$queryRaw<any[]>`SELECT COALESCE(MAX("sortOrder"),0)+10 AS value FROM cities`;
       await tx.$executeRaw`INSERT INTO cities (id,name,slug,"isActive","sortOrder","updatedAt") VALUES (${id},${value.name},${value.slug},${value.isActive},${order[0].value},NOW())`;
+      await writeAuditLog(tx, actor, { action: "city.created", entityType: "city", entityId: id, changes: { old: null, new: { name: value.name, slug: value.slug, isActive: value.isActive } }, metadata: { cityId: id } });
     });
     return NextResponse.json({ id }, { status: 201 });
   } catch (error) { return errorResponse(error); }
@@ -74,13 +76,13 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const parsed = updateSchema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_CITY" }, { status: 400 });
     const value = parsed.data;
     const db = adminDb();
     await db.$transaction(async (tx) => {
-      const existing = await tx.$queryRaw<any[]>`SELECT id,"isActive" FROM cities WHERE id=${value.id} FOR UPDATE`;
+      const existing = await tx.$queryRaw<any[]>`SELECT id,name,slug,"isActive" FROM cities WHERE id=${value.id} FOR UPDATE`;
       if (!existing.length) throw new Error("NOT_FOUND");
       if (value.name || value.slug) {
         const duplicate = await tx.$queryRaw<any[]>`SELECT id FROM cities WHERE id<>${value.id} AND ((${value.name ?? null}::text IS NOT NULL AND lower(name)=lower(${value.name ?? null})) OR (${value.slug ?? null}::text IS NOT NULL AND slug=${value.slug ?? null})) LIMIT 1`;
@@ -92,6 +94,12 @@ export async function PATCH(request: Request) {
           "isActive"=COALESCE(${value.isActive ?? null},"isActive"),"updatedAt"=NOW()
         WHERE id=${value.id}
       `;
+      const changes: Record<string, { old: unknown; new: unknown }> = {};
+      for (const field of ["name", "slug", "isActive"] as const) {
+        const next = value[field] ?? existing[0][field];
+        if (next !== existing[0][field]) changes[field] = { old: existing[0][field], new: next };
+      }
+      if (Object.keys(changes).length) await writeAuditLog(tx, actor, { action: "city.updated", entityType: "city", entityId: value.id, changes, metadata: { cityId: value.id } });
     });
     return NextResponse.json({ ok: true });
   } catch (error) { return errorResponse(error); }

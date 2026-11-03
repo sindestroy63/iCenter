@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
 import { CATALOG_MENU_SETTING_KEY, createDefaultCatalogMenu, parseCatalogMenu, type MenuTaxonomy } from "@/lib/catalog-menu";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const body = await request.json() as { menu?: unknown };
     const menu = parseCatalogMenu(body.menu);
     if (!menu) return NextResponse.json({ error: "INVALID_MENU" }, { status: 400 });
@@ -80,10 +81,15 @@ export async function PUT(request: Request) {
       const rows = await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id=ANY(${mediaIds}::text[]) AND "mimeType" IN ('image/jpeg','image/png','image/webp')`;
       if (new Set(rows.map((row) => row.id)).size !== new Set(mediaIds).size) return NextResponse.json({ error: "INVALID_MEDIA" }, { status: 400 });
     }
-    await db.$executeRaw`
-      INSERT INTO settings (id,key,value,description,"updatedAt") VALUES (${newId()},${CATALOG_MENU_SETTING_KEY},${JSON.stringify(menu)}::jsonb,'Catalog mega-menu configuration',NOW())
-      ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,"updatedAt"=NOW()
-    `;
+    await db.$transaction(async (tx) => {
+      const previous = await tx.$queryRaw<Array<{ value: unknown }>>`SELECT value FROM settings WHERE key=${CATALOG_MENU_SETTING_KEY} LIMIT 1`;
+      const changes = auditDiff(previous[0]?.value ?? null, menu);
+      await tx.$executeRaw`
+        INSERT INTO settings (id,key,value,description,"updatedAt") VALUES (${newId()},${CATALOG_MENU_SETTING_KEY},${JSON.stringify(menu)}::jsonb,'Catalog mega-menu configuration',NOW())
+        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,"updatedAt"=NOW()
+      `;
+      if (changes) await writeAuditLog(tx, actor, { action: "catalog_menu.updated", entityType: "catalog_menu", entityId: CATALOG_MENU_SETTING_KEY, changes, metadata: { settingKey: CATALOG_MENU_SETTING_KEY } });
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

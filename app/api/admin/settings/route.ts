@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdminSession, requireGlobalAdminMutation } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -38,8 +39,10 @@ export async function GET() {
     if (session.role === "CITY_MANAGER") {
       const cities = await db.$queryRaw<any[]>`
         SELECT c.id AS "cityId",c.name,c.address,c.phone,c."workingHours",c.timezone,c."socialLinks"
-        FROM user_city_access a JOIN cities c ON c.id=a."cityId"
-        WHERE a."userId"=${session.userId} AND c."isActive"=TRUE ORDER BY c.name LIMIT 2
+        FROM cities c WHERE c."isActive"=TRUE AND (
+          EXISTS (SELECT 1 FROM users u WHERE u.id=${session.userId} AND COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE)
+          OR EXISTS (SELECT 1 FROM user_city_access a WHERE a."userId"=${session.userId} AND a."cityId"=c.id)
+        ) ORDER BY c.name LIMIT 2
       `;
       return NextResponse.json({ scope: "city-readonly", city: cities.length === 1 ? cities[0] : null });
     }
@@ -58,7 +61,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const parsed = globalSchema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_SETTINGS" }, { status: 400 });
     const value = parsed.data;
@@ -72,6 +75,7 @@ export async function PUT(request: Request) {
       const values = [["store.defaultCity", value.defaultCity, "Default city slug"]] as const;
       for (const [key, item, description] of values) {
         const existing = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM settings WHERE key=${key} ORDER BY id LIMIT 1 FOR UPDATE`;
+        const previous = existing.length ? await tx.$queryRaw<Array<{ value: unknown }>>`SELECT value FROM settings WHERE id=${existing[0].id}` : [];
         if (existing.length) {
           const duplicate = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM settings WHERE key=${key} AND id<>${existing[0].id} LIMIT 1`;
           if (duplicate.length) throw new Error("DUPLICATE_SETTING");
@@ -80,6 +84,7 @@ export async function PUT(request: Request) {
           const id = newId();
           await tx.$executeRaw`INSERT INTO settings (id,key,value,description,"updatedAt") VALUES (${id},${key},${JSON.stringify(item)}::jsonb,${description},NOW())`;
         }
+        if (JSON.stringify(previous[0]?.value ?? null) !== JSON.stringify(item)) await writeAuditLog(tx, actor, { action: "settings.updated", entityType: "setting", entityId: key, changes: { value: { old: previous[0]?.value ?? null, new: item } }, metadata: { settingKey: key } });
       }
     });
     return NextResponse.json({ ok: true });
@@ -88,16 +93,21 @@ export async function PUT(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const parsed = citySchema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_SETTINGS" }, { status: 400 });
     const value = parsed.data;
     const db = adminDb();
-    const result = await db.$executeRaw`
-      UPDATE cities SET address=${value.address},phone=${value.phone},"workingHours"=${value.workingHours},timezone=${value.timezone},"socialLinks"=${JSON.stringify(value.socialLinks)}::jsonb,"updatedAt"=NOW()
-      WHERE id=${value.cityId}
-    `;
-    if (!result) throw new Error("NOT_FOUND");
+    await db.$transaction(async (tx) => {
+      const existing = await tx.$queryRaw<any[]>`SELECT id,address,phone,"workingHours",timezone,"socialLinks" FROM cities WHERE id=${value.cityId} FOR UPDATE`;
+      if (!existing.length) throw new Error("NOT_FOUND");
+      const current = existing[0];
+      const next = { address: value.address, phone: value.phone, workingHours: value.workingHours, timezone: value.timezone, socialLinks: value.socialLinks };
+      const changes: Record<string, { old: unknown; new: unknown }> = {};
+      for (const field of Object.keys(next) as Array<keyof typeof next>) if (JSON.stringify(current[field]) !== JSON.stringify(next[field])) changes[field] = { old: current[field] ?? null, new: next[field] ?? null };
+      await tx.$executeRaw`UPDATE cities SET address=${value.address},phone=${value.phone},"workingHours"=${value.workingHours},timezone=${value.timezone},"socialLinks"=${JSON.stringify(value.socialLinks)}::jsonb,"updatedAt"=NOW() WHERE id=${value.cityId}`;
+      if (Object.keys(changes).length) await writeAuditLog(tx, actor, { action: "city.updated", entityType: "city", entityId: value.cityId, changes, metadata: { cityId: value.cityId } });
+    });
     return NextResponse.json({ ok: true });
   } catch (error) { return responseError(error, "SAVE"); }
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
@@ -69,7 +70,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const type = typeSchema.safeParse(new URL(request.url).searchParams.get("type"));
     if (!type.success) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
     const common = { name: nameSchema, slug: slugSchema, description: descriptionSchema.default(""), sortOrder: orderSchema.default(0), isActive: activeSchema.default(true) };
@@ -90,8 +91,10 @@ export async function POST(request: Request) {
         const category = value as z.infer<typeof schema> & { parentId?: string | null };
         await validateParent(tx, category.parentId);
         await tx.$executeRaw`INSERT INTO categories (id,name,slug,description,"parentId","sortOrder","isActive","updatedAt") VALUES (${id},${category.name},${category.slug},${category.description},${category.parentId ?? null},${category.sortOrder},${category.isActive},NOW())`;
+        await writeAuditLog(tx, actor, { action: "category.created", entityType: "category", entityId: id, changes: { old: null, new: { name: category.name, slug: category.slug, description: category.description, parentId: category.parentId ?? null, sortOrder: category.sortOrder, isActive: category.isActive } } });
       } else {
         await tx.$executeRaw`INSERT INTO brands (id,name,slug,description,"sortOrder","isActive","updatedAt") VALUES (${id},${value.name},${value.slug},${value.description},${value.sortOrder},${value.isActive},NOW())`;
+        await writeAuditLog(tx, actor, { action: "dictionary.created", entityType: "brand", entityId: id, changes: { old: null, new: { name: value.name, slug: value.slug, description: value.description, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { dictionary: "brand" } });
       }
     });
     return NextResponse.json({ id }, { status: 201 });
@@ -100,7 +103,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const type = typeSchema.safeParse(new URL(request.url).searchParams.get("type"));
     if (!type.success) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
     const common = { id: z.string().trim().min(1).max(100), name: nameSchema.optional(), slug: slugSchema.optional(), description: descriptionSchema.optional(), sortOrder: orderSchema.optional(), isActive: activeSchema.optional() };
@@ -114,8 +117,8 @@ export async function PATCH(request: Request) {
     await db.$transaction(async (tx) => {
       const table = type.data;
       const existing = table === "categories"
-        ? await tx.$queryRaw<any[]>`SELECT id FROM categories WHERE id=${value.id}`
-        : await tx.$queryRaw<any[]>`SELECT id FROM brands WHERE id=${value.id}`;
+        ? await tx.$queryRaw<any[]>`SELECT id,name,slug,description,"parentId","sortOrder","isActive" FROM categories WHERE id=${value.id}`
+        : await tx.$queryRaw<any[]>`SELECT id,name,slug,description,"sortOrder","isActive" FROM brands WHERE id=${value.id}`;
       if (!existing.length) throw new Error("NOT_FOUND");
       if (value.name || value.slug) {
         const duplicate = table === "categories"
@@ -136,6 +139,11 @@ export async function PATCH(request: Request) {
       } else {
         await tx.$executeRaw`UPDATE brands SET name=COALESCE(${value.name ?? null},name),slug=COALESCE(${value.slug ?? null},slug),description=COALESCE(${value.description ?? null},description),"sortOrder"=COALESCE(${value.sortOrder ?? null},"sortOrder"),"isActive"=COALESCE(${value.isActive ?? null},"isActive"),"updatedAt"=NOW() WHERE id=${value.id}`;
       }
+      const after = table === "categories"
+        ? (await tx.$queryRaw<any[]>`SELECT id,name,slug,description,"parentId","sortOrder","isActive" FROM categories WHERE id=${value.id}`)[0]
+        : (await tx.$queryRaw<any[]>`SELECT id,name,slug,description,"sortOrder","isActive" FROM brands WHERE id=${value.id}`)[0];
+      const changes = auditDiff(existing[0], after);
+      if (changes) await writeAuditLog(tx, actor, { action: table === "categories" ? "category.updated" : "dictionary.updated", entityType: table === "categories" ? "category" : "brand", entityId: value.id, changes, metadata: table === "categories" ? undefined : { dictionary: "brand" } });
     });
     return NextResponse.json({ ok: true });
   } catch (error) { return errorResponse(error); }

@@ -10,7 +10,7 @@ export async function PATCH(request: Request, context: { params: { orderNumber: 
     const body = await request.json().catch(() => null);
     if (!body || typeof body.status !== "string") return NextResponse.json({ error: "INVALID_STATUS" }, { status: 400 });
     const status = await updateRequestStatus(
-      { userId: session.userId, role: session.role },
+      { userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name },
       context.params.orderNumber,
       body.status,
     );
@@ -31,7 +31,7 @@ export async function DELETE(request: Request, context: { params: { orderNumber:
   try {
     const session = await requireAdminMutation(request);
     if (session.role !== "OWNER") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    await deleteRequest({ userId: session.userId, role: session.role }, context.params.orderNumber);
+    await deleteRequest({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, context.params.orderNumber);
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const status = error instanceof RequestError ? error.status

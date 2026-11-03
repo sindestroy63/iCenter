@@ -13,6 +13,7 @@ import AdminMediaBackend from "@/components/AdminMediaBackend";
 import AdminCatalogMenuBanners from "@/components/AdminCatalogMenuBanners";
 import AdminCatalogMenu from "@/components/AdminCatalogMenu";
 import AdminProductGroupsBackend from "@/components/AdminProductGroupsBackend";
+import AdminAuditLogBackend from "@/components/AdminAuditLogBackend";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
@@ -31,6 +32,8 @@ export default async function AdminSection({ params }: { params: { slug: string[
       return <AdminProductsBackend />;
     case "employees":
       return <AdminEmployeesBackend />;
+    case "audit-log":
+      return <AdminAuditLogBackend />;
     case "inventory":
       return <AdminCityInventory />;
     case "categories":

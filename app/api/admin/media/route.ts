@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId, uploadFilePath, uploadRoot } from "@/lib/admin-db";
 import { acceptedExtensions, bannerVideoMaxBytes, detectUploadMedia, IMAGE_UPLOAD_MAX_BYTES } from "@/lib/media-upload";
+import { writeAuditLog } from "@/lib/admin-audit";
 import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -70,10 +71,13 @@ export async function POST(request: Request) {
     await writeFile(tempPath, bytes, { flag: "wx", mode: 0o600 });
     await rename(tempPath, finalPath);
     const filename = path.basename(file.name).normalize("NFC").replace(new RegExp("[^\\p{L}\\p{N}._-]", "gu"), "_").slice(0, 180) || `${id}.${signature.ext}`;
-    await adminDb().$executeRaw`
-      INSERT INTO media (id, filename, "storagePath", "mimeType", "fileSize", alt, "uploadedByUserId")
-      VALUES (${id}, ${filename}, ${storagePath}, ${signature.mime}, ${bytes.length}, ${typeof alt === "string" ? alt.slice(0, 500) : null}, ${session.userId})
-    `;
+    await adminDb().$transaction(async (tx) => {
+      await tx.$executeRaw`
+        INSERT INTO media (id, filename, "storagePath", "mimeType", "fileSize", alt, "uploadedByUserId")
+        VALUES (${id}, ${filename}, ${storagePath}, ${signature.mime}, ${bytes.length}, ${typeof alt === "string" ? alt.slice(0, 500) : null}, ${session.userId})
+      `;
+      await writeAuditLog(tx, session, { action: "media.uploaded", entityType: "media", entityId: id, changes: { old: null, new: { filename, storagePath, mimeType: signature.mime, fileSize: bytes.length, alt: typeof alt === "string" ? alt.slice(0, 500) : null } }, metadata: { purpose: purpose ?? null } });
+    });
     return NextResponse.json({ data: { id, filename, name: file.name, storagePath, url: `/${storagePath}`, alt: typeof alt === "string" ? alt : "", fileSize: bytes.length, mimeType: signature.mime, uploadedAt: now.toISOString(), used: false } }, { status: 201 });
   } catch (error) {
     if (tempPath) await rm(tempPath, { force: true }).catch(() => undefined);

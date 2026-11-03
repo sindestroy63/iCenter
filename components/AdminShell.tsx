@@ -3,11 +3,11 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, ShoppingCart, Package, FolderTree, Tags, Circle, MapPin, Image, Star, Flame, Users, Settings, Files, Search, Menu, ExternalLink, ChevronDown, X, LogOut, UserRound, Layers3 } from "lucide-react";
+import { LayoutDashboard, ShoppingCart, Package, FolderTree, Tags, Circle, MapPin, Image, Star, Flame, Users, Settings, Files, Search, Menu, ExternalLink, ChevronDown, X, LogOut, UserRound, Layers3, ClipboardList } from "lucide-react";
 
 type Role = "OWNER" | "ADMIN" | "DEVELOPER" | "CITY_MANAGER";
 type City = { id?: string; slug: string; name: string };
-export type SessionUser = { id: string; email: string; name: string | null; firstName: string | null; lastName: string | null; avatarMediaId: string | null; avatarUrl: string | null; role: Role; cities: City[] };
+export type SessionUser = { id: string; email: string; name: string | null; firstName: string | null; lastName: string | null; avatarMediaId: string | null; avatarUrl: string | null; role: Role; allCities?: boolean; allCitiesCanManagePrices?: boolean; allCitiesCanManageStock?: boolean; cities: City[] };
 export const AdminUserContext = React.createContext<{ user: SessionUser | null; setUser: React.Dispatch<React.SetStateAction<SessionUser | null>> } | null>(null);
 
 const nav = [["Главная", LayoutDashboard, "/admin"], ["Заявки", ShoppingCart, "/admin/requests"], ["Товары", Package, "/admin/products"], ["Категории", FolderTree, "/admin/categories"], ["Бренды", Tags, "/admin/brands"], ["Справочник", Circle, "/admin/dictionaries"], ["Типы товаров", Package, "/admin/product-types"], ["Города", MapPin, "/admin/cities"], ["Баннеры", Image, "/admin/banners"], ["Меню каталога", Image, "/admin/catalog-menu"], ["Лучшие предложения", Star, "/admin/best-offers"], ["Популярные товары", Flame, "/admin/popular-products"], ["Сотрудники", Users, "/admin/employees"], ["Настройки сайта", Settings, "/admin/settings"], ["Медиа", Files, "/admin/media"]] as const;
@@ -25,10 +25,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [city, setCity] = React.useState("");
   const [loggingOut, setLoggingOut] = React.useState(false);
   const [logoutError, setLogoutError] = React.useState("");
-  const currentNav = [...nav, ["Группы товаров", Layers3, "/admin/product-groups"] as const].filter(([, , href]) => href !== "/admin/brands" && href !== "/admin/product-types");
+  const currentNav = [...nav, ["Группы товаров", Layers3, "/admin/product-groups"] as const, ["Журнал действий", ClipboardList, "/admin/audit-log"] as const].filter(([, , href]) => href !== "/admin/brands" && href !== "/admin/product-types");
   const isNavActive = (href: string) => pathname === href || (href !== "/admin" && pathname.startsWith(`${href}/`));
   const visibleNav = user?.role === "CITY_MANAGER" || !user
-    ? currentNav.filter(([, , href]) => href === "/admin" || href === "/admin/requests" || href === "/admin/products")
+    ? currentNav.filter(([, , href]) => href === "/admin" || href === "/admin/requests")
     : currentNav;
   const active = visibleNav.find(([, , href]) => isNavActive(href)) ?? visibleNav[0];
   const activeTitle = pathname === "/admin/profile" ? "Мой профиль" : active[0];

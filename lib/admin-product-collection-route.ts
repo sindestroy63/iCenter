@@ -6,6 +6,7 @@ import { z } from "zod";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
 import { collectionError, collectionSchema, loadAdminCollection, type ProductCollection } from "@/lib/product-collections";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 
 const addSchema = z.object({
   productId: z.string().min(1).max(160),
@@ -17,6 +18,7 @@ const updateSchema = z.object({ id: z.string().min(1).max(160), sortOrder: z.num
 const idSchema = z.object({ id: z.string().min(1).max(160) });
 
 function tableSql(collection: ProductCollection) { return Prisma.raw(collection); }
+function auditAction(collection: ProductCollection, kind: "created" | "updated" | "deleted") { return `${collection === "best_offers" ? "best_offer" : "popular_product"}.${kind}`; }
 
 function responseError(error: unknown) {
   const { message, code } = collectionError(error);
@@ -40,7 +42,7 @@ export async function collectionGet(request: Request, collection: ProductCollect
 
 export async function collectionPost(request: Request, collection: ProductCollection) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const body = addSchema.safeParse(await request.json());
     if (!body.success) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
     const { productId, variantId = null, city, sortOrder } = body.data;
@@ -95,6 +97,7 @@ export async function collectionPost(request: Request, collection: ProductCollec
         INSERT INTO popular_products (id,"productId","variantId","sortOrder","isActive","createdAt","updatedAt")
         VALUES (${id},${productId},${variantId},${position},TRUE,NOW(),NOW())
       `;
+      await writeAuditLog(tx, actor, { action: auditAction(collection, "created"), entityType: collection === "best_offers" ? "best_offer" : "popular_product", entityId: id, changes: { old: null, new: { productId, variantId, sortOrder: position, isActive: true } }, metadata: { collection, cityId } });
     });
     return NextResponse.json({ data: { id } }, { status: 201 });
   } catch (error) { return responseError(error); }
@@ -102,24 +105,41 @@ export async function collectionPost(request: Request, collection: ProductCollec
 
 export async function collectionPatch(request: Request, collection: ProductCollection) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const body = updateSchema.safeParse(await request.json());
     if (!body.success) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
-    const table = tableSql(collection);
-    const result = await adminDb().$executeRaw(Prisma.sql`UPDATE ${table} SET "sortOrder"=COALESCE(${body.data.sortOrder ?? null},"sortOrder"),"isActive"=COALESCE(${body.data.isActive ?? null},"isActive"),"updatedAt"=NOW() WHERE id=${body.data.id}`);
-    if (!result) throw new Error("NOT_FOUND");
+    const table = tableSql(collection); const db = adminDb(); const schema = await collectionSchema(db, collection);
+    await db.$transaction(async (tx) => {
+      const before = schema.variantColumnExists
+        ? (await tx.$queryRaw<any[]>(Prisma.sql`SELECT "productId","variantId","sortOrder","isActive" FROM ${table} WHERE id=${body.data.id}`))[0]
+        : (await tx.$queryRaw<any[]>(Prisma.sql`SELECT "productId",NULL::text AS "variantId","sortOrder","isActive" FROM ${table} WHERE id=${body.data.id}`))[0];
+      if (!before) throw new Error("NOT_FOUND");
+      await tx.$executeRaw(Prisma.sql`UPDATE ${table} SET "sortOrder"=COALESCE(${body.data.sortOrder ?? null},"sortOrder"),"isActive"=COALESCE(${body.data.isActive ?? null},"isActive"),"updatedAt"=NOW() WHERE id=${body.data.id}`);
+      const after = schema.variantColumnExists
+        ? (await tx.$queryRaw<any[]>(Prisma.sql`SELECT "productId","variantId","sortOrder","isActive" FROM ${table} WHERE id=${body.data.id}`))[0]
+        : (await tx.$queryRaw<any[]>(Prisma.sql`SELECT "productId",NULL::text AS "variantId","sortOrder","isActive" FROM ${table} WHERE id=${body.data.id}`))[0];
+      const changes = auditDiff(before, after);
+      if (changes) await writeAuditLog(tx, actor, { action: auditAction(collection, "updated"), entityType: collection === "best_offers" ? "best_offer" : "popular_product", entityId: body.data.id, changes, metadata: { collection } });
+    });
     return NextResponse.json({ data: { id: body.data.id } });
   } catch (error) { return responseError(error); }
 }
 
 export async function collectionDelete(request: Request, collection: ProductCollection) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const body = idSchema.safeParse(await request.json());
     if (!body.success) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
-    const table = tableSql(collection);
-    const result = await adminDb().$executeRaw(Prisma.sql`DELETE FROM ${table} WHERE id=${body.data.id}`);
-    if (!result) throw new Error("NOT_FOUND");
+    const table = tableSql(collection); const db = adminDb(); const schema = await collectionSchema(db, collection);
+    await db.$transaction(async (tx) => {
+      const before = schema.variantColumnExists
+        ? (await tx.$queryRaw<any[]>(Prisma.sql`SELECT "productId","variantId","sortOrder","isActive" FROM ${table} WHERE id=${body.data.id}`))[0]
+        : (await tx.$queryRaw<any[]>(Prisma.sql`SELECT "productId",NULL::text AS "variantId","sortOrder","isActive" FROM ${table} WHERE id=${body.data.id}`))[0];
+      if (!before) throw new Error("NOT_FOUND");
+      const result = await tx.$executeRaw(Prisma.sql`DELETE FROM ${table} WHERE id=${body.data.id}`);
+      if (!result) throw new Error("NOT_FOUND");
+      await writeAuditLog(tx, actor, { action: auditAction(collection, "deleted"), entityType: collection === "best_offers" ? "best_offer" : "popular_product", entityId: body.data.id, changes: { deleted: { old: before, new: null } }, metadata: { collection } });
+    });
     return NextResponse.json({ data: { id: body.data.id } });
   } catch (error) { return responseError(error); }
 }

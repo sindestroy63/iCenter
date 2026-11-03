@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 import { countGroupProducts, groupDbError, groupSchema, groupSchemaRequired, groupVariantSchemaRequired, normalizeGroupRule, validateGroupRuleReferences } from "@/lib/product-groups";
 
 export const dynamic = "force-dynamic";
@@ -67,7 +68,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const body = await request.json() as { kind?: string };
     const db = adminDb(); const schema = await groupSchema(db); groupSchemaRequired(schema);
     if (body.kind === "save") {
@@ -76,7 +77,8 @@ export async function POST(request: Request) {
       const uniqueVariantIds = Array.from(new Set(parsed.data.variantIds));
       const result = await db.$transaction(async (tx) => {
         const id = parsed.data.id ?? newId();
-        const current = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM catalog_groups WHERE id=${id} LIMIT 1`;
+        const current = await tx.$queryRaw<any[]>`SELECT id,slug,title,description,isactive AS "isActive",sortorder AS "sortOrder" FROM catalog_groups WHERE id=${id} LIMIT 1`;
+        const currentVariants = await tx.$queryRaw<Array<{ variantId: string }>>`SELECT "variantId" FROM catalog_group_variants WHERE "groupId"=${id} ORDER BY "sortOrder","variantId"`;
         if (parsed.data.id && !current.length) throw new Error("NOT_FOUND");
         const duplicateSlug = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM catalog_groups WHERE slug=${parsed.data.slug} AND id<>${id} LIMIT 1`;
         if (duplicateSlug.length) throw new Error("GROUP_EXISTS");
@@ -94,6 +96,9 @@ export async function POST(request: Request) {
           else await tx.$executeRaw`DELETE FROM catalog_group_variants WHERE "groupId"=${id}`;
           for (const [sortOrder, variantId] of Array.from(uniqueVariantIds.entries())) await tx.$executeRaw`INSERT INTO catalog_group_variants ("groupId","variantId","sortOrder","createdAt") VALUES (${id},${variantId},${sortOrder},NOW()) ON CONFLICT ("groupId","variantId") DO UPDATE SET "sortOrder"=EXCLUDED."sortOrder"`;
         }
+        const after = (await tx.$queryRaw<any[]>`SELECT id,slug,title,description,isactive AS "isActive",sortorder AS "sortOrder" FROM catalog_groups WHERE id=${id} LIMIT 1`)[0];
+        const changes = auditDiff(current[0] ? { ...current[0], variantIds: currentVariants.map((row) => row.variantId) } : null, { ...after, variantIds: uniqueVariantIds });
+        if (changes) await writeAuditLog(tx, actor, { action: current[0] ? "product_group.updated" : "product_group.created", entityType: "product_group", entityId: id, changes });
         return { id, variantCount: uniqueVariantIds.length };
       });
       return NextResponse.json({ data: result }, { status: parsed.data.id ? 200 : 201 });
@@ -101,7 +106,7 @@ export async function POST(request: Request) {
     if (body.kind === "group") {
       const parsed = groupInput.safeParse(body); if (!parsed.success) return NextResponse.json({ error: "INVALID_GROUP" }, { status: 400 });
       const duplicateSlug = await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM catalog_groups WHERE slug=${parsed.data.slug} LIMIT 1`; if (duplicateSlug.length) throw new Error("GROUP_EXISTS");
-      const id = newId(); await db.$executeRaw`INSERT INTO catalog_groups (id,slug,title,description,isactive,sortorder,createdat,updatedat) VALUES (${id},${parsed.data.slug},${parsed.data.title},${parsed.data.description},${parsed.data.isActive},${parsed.data.sortOrder},NOW(),NOW())`; return NextResponse.json({ data: { id } }, { status: 201 });
+      const id = newId(); await db.$transaction(async (tx) => { await tx.$executeRaw`INSERT INTO catalog_groups (id,slug,title,description,isactive,sortorder,createdat,updatedat) VALUES (${id},${parsed.data.slug},${parsed.data.title},${parsed.data.description},${parsed.data.isActive},${parsed.data.sortOrder},NOW(),NOW())`; await writeAuditLog(tx, actor, { action: "product_group.created", entityType: "product_group", entityId: id, changes: { old: null, new: { slug: parsed.data.slug, title: parsed.data.title, description: parsed.data.description, isActive: parsed.data.isActive, sortOrder: parsed.data.sortOrder } } }); }); return NextResponse.json({ data: { id } }, { status: 201 });
     }
     if (body.kind === "product") {
       const parsed = productInput.safeParse(body); if (!parsed.success) return NextResponse.json({ error: "INVALID_PRODUCT" }, { status: 400 });
@@ -110,7 +115,7 @@ export async function POST(request: Request) {
         const variantConflict = await db.$queryRaw<Array<{ variantId: string }>>`SELECT gv."variantId" FROM catalog_group_variants gv JOIN product_variants v ON v.id=gv."variantId" WHERE gv."groupId"=${parsed.data.groupId} AND v."productId"=${parsed.data.productId} LIMIT 1`;
         if (variantConflict.length) throw new Error("PRODUCT_VARIANT_CONFLICT");
       }
-      await db.$executeRaw`INSERT INTO catalog_group_products ("groupId","productId","sortOrder","createdAt") VALUES (${parsed.data.groupId},${parsed.data.productId},${parsed.data.sortOrder},NOW())`; return NextResponse.json({ ok: true }, { status: 201 });
+      await db.$transaction(async (tx) => { await tx.$executeRaw`INSERT INTO catalog_group_products ("groupId","productId","sortOrder","createdAt") VALUES (${parsed.data.groupId},${parsed.data.productId},${parsed.data.sortOrder},NOW())`; await writeAuditLog(tx, actor, { action: "product_group.updated", entityType: "product_group", entityId: parsed.data.groupId, changes: { product: { old: null, new: { productId: parsed.data.productId, sortOrder: parsed.data.sortOrder } } } }); }); return NextResponse.json({ ok: true }, { status: 201 });
     }
     if (body.kind === "variant" || body.kind === "variants") {
       groupVariantSchemaRequired(schema);
@@ -128,13 +133,14 @@ export async function POST(request: Request) {
       if (conflicts.length) throw new Error("PRODUCT_VARIANT_CONFLICT");
       const result = await db.$transaction(async (tx) => {
         for (const variantId of uniqueIds) await tx.$executeRaw`INSERT INTO catalog_group_variants ("groupId","variantId","sortOrder","createdAt") VALUES (${groupId},${variantId},${sortOrder},NOW())`;
+        await writeAuditLog(tx, actor, { action: "product_group.updated", entityType: "product_group", entityId: groupId, changes: { variants: { old: null, new: { variantIds: uniqueIds, sortOrder } } } });
         return uniqueIds.length;
       });
       return NextResponse.json({ ok: true, count: result }, { status: 201 });
     }
     if (body.kind === "rule") {
       const parsed = ruleInput.safeParse(body); if (!parsed.success) return NextResponse.json({ error: "INVALID_RULE" }, { status: 400 });
-      const rule = normalizeGroupRule(parsed.data); await validateGroupRuleReferences(db, rule); const id = newId(); await db.$executeRaw`INSERT INTO catalog_group_rules (id,"groupId","brandId","globalProductTypeId","modelId","sortOrder","isActive") VALUES (${id},${parsed.data.groupId},${rule.brandId},${rule.globalProductTypeId},${rule.modelId},${rule.sortOrder},${rule.isActive})`; return NextResponse.json({ data: { id } }, { status: 201 });
+      const rule = normalizeGroupRule(parsed.data); await validateGroupRuleReferences(db, rule); const id = newId(); await db.$transaction(async (tx) => { await tx.$executeRaw`INSERT INTO catalog_group_rules (id,"groupId","brandId","globalProductTypeId","modelId","sortOrder","isActive") VALUES (${id},${parsed.data.groupId},${rule.brandId},${rule.globalProductTypeId},${rule.modelId},${rule.sortOrder},${rule.isActive})`; await writeAuditLog(tx, actor, { action: "product_group.updated", entityType: "product_group", entityId: parsed.data.groupId, changes: { rule: { old: null, new: { id, brandId: rule.brandId, globalProductTypeId: rule.globalProductTypeId, modelId: rule.modelId, sortOrder: rule.sortOrder, isActive: rule.isActive } } } }); }); return NextResponse.json({ data: { id } }, { status: 201 });
     }
     return NextResponse.json({ error: "INVALID_KIND" }, { status: 400 });
   } catch (error) { return responseError(error); }
@@ -142,16 +148,16 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    await requireGlobalAdminMutation(request); const body = await request.json() as { kind?: string; id?: string; [key: string]: unknown }; const db = adminDb(); const schema = await groupSchema(db); groupSchemaRequired(schema);
+    const actor = await requireGlobalAdminMutation(request); const body = await request.json() as { kind?: string; id?: string; [key: string]: unknown }; const db = adminDb(); const schema = await groupSchema(db); groupSchemaRequired(schema);
     if (!body.id) return NextResponse.json({ error: "INVALID_ID" }, { status: 400 });
-    if (body.kind === "group") { const parsed = groupInput.partial().safeParse(body); if (!parsed.success) return NextResponse.json({ error: "INVALID_GROUP" }, { status: 400 }); const d=parsed.data; const result=await db.$executeRaw`UPDATE catalog_groups SET slug=COALESCE(${d.slug ?? null},slug),title=COALESCE(${d.title ?? null},title),description=COALESCE(${d.description ?? null},description),isactive=COALESCE(${d.isActive ?? null},isactive),sortorder=COALESCE(${d.sortOrder ?? null},sortorder),updatedat=NOW() WHERE id=${body.id}`; if(!result) throw new Error("NOT_FOUND"); return NextResponse.json({ ok:true }); }
-    if (body.kind === "product") { const parsed=z.object({ groupId:z.string().min(1), productId:z.string().min(1), sortOrder:z.number().int().min(-100000).max(100000).optional() }).safeParse(body); if(!parsed.success) return NextResponse.json({error:"INVALID_PRODUCT"},{status:400}); const result=await db.$executeRaw`UPDATE catalog_group_products SET "sortOrder"=COALESCE(${parsed.data.sortOrder ?? null},"sortOrder") WHERE "groupId"=${parsed.data.groupId} AND "productId"=${parsed.data.productId}`; if(!result) throw new Error("NOT_FOUND"); return NextResponse.json({ok:true}); }
-    if (body.kind === "variant") { groupVariantSchemaRequired(schema); const parsed=variantInput.partial({ groupId: true }).extend({ id: z.string().min(1) }).safeParse(body); if(!parsed.success) return NextResponse.json({error:"INVALID_VARIANT"},{status:400}); const result=await db.$executeRaw`UPDATE catalog_group_variants SET "sortOrder"=COALESCE(${parsed.data.sortOrder ?? null},"sortOrder") WHERE "groupId"=${parsed.data.groupId} AND "variantId"=${parsed.data.variantId}`; if(!result) throw new Error("NOT_FOUND"); return NextResponse.json({ok:true}); }
-    if (body.kind === "rule") { const current=await db.$queryRaw<any[]>`SELECT "groupId","brandId","globalProductTypeId","modelId","sortOrder","isActive" FROM catalog_group_rules WHERE id=${body.id} LIMIT 1`; if(!current.length) throw new Error("NOT_FOUND"); const rule=normalizeGroupRule({ ...current[0], ...body }); await validateGroupRuleReferences(db,rule); const result=await db.$executeRaw`UPDATE catalog_group_rules SET "brandId"=${rule.brandId},"globalProductTypeId"=${rule.globalProductTypeId},"modelId"=${rule.modelId},"sortOrder"=${rule.sortOrder},"isActive"=${rule.isActive} WHERE id=${body.id}`; if(!result) throw new Error("NOT_FOUND"); return NextResponse.json({ok:true}); }
+    if (body.kind === "group") { const parsed = groupInput.partial().safeParse(body); if (!parsed.success) return NextResponse.json({ error: "INVALID_GROUP" }, { status: 400 }); const d=parsed.data; await db.$transaction(async (tx) => { const before=(await tx.$queryRaw<any[]>`SELECT slug,title,description,isactive AS "isActive",sortorder AS "sortOrder" FROM catalog_groups WHERE id=${body.id}`)[0]; if(!before) throw new Error("NOT_FOUND"); await tx.$executeRaw`UPDATE catalog_groups SET slug=COALESCE(${d.slug ?? null},slug),title=COALESCE(${d.title ?? null},title),description=COALESCE(${d.description ?? null},description),isactive=COALESCE(${d.isActive ?? null},isactive),sortorder=COALESCE(${d.sortOrder ?? null},sortorder),updatedat=NOW() WHERE id=${body.id}`; const after=(await tx.$queryRaw<any[]>`SELECT slug,title,description,isactive AS "isActive",sortorder AS "sortOrder" FROM catalog_groups WHERE id=${body.id}`)[0]; const changes=auditDiff(before,after); if(changes) await writeAuditLog(tx,actor,{action:"product_group.updated",entityType:"product_group",entityId:body.id!,changes}); }); return NextResponse.json({ ok:true }); }
+    if (body.kind === "product") { const parsed=z.object({ groupId:z.string().min(1), productId:z.string().min(1), sortOrder:z.number().int().min(-100000).max(100000).optional() }).safeParse(body); if(!parsed.success) return NextResponse.json({error:"INVALID_PRODUCT"},{status:400}); await db.$transaction(async(tx)=>{ const before=(await tx.$queryRaw<any[]>`SELECT "sortOrder" FROM catalog_group_products WHERE "groupId"=${parsed.data.groupId} AND "productId"=${parsed.data.productId}`)[0]; if(!before) throw new Error("NOT_FOUND"); await tx.$executeRaw`UPDATE catalog_group_products SET "sortOrder"=COALESCE(${parsed.data.sortOrder ?? null},"sortOrder") WHERE "groupId"=${parsed.data.groupId} AND "productId"=${parsed.data.productId}`; const after=(await tx.$queryRaw<any[]>`SELECT "sortOrder" FROM catalog_group_products WHERE "groupId"=${parsed.data.groupId} AND "productId"=${parsed.data.productId}`)[0]; const changes=auditDiff(before,after); if(changes) await writeAuditLog(tx,actor,{action:"product_group.updated",entityType:"product_group",entityId:parsed.data.groupId,changes}); }); return NextResponse.json({ok:true}); }
+    if (body.kind === "variant") { groupVariantSchemaRequired(schema); const parsed=variantInput.partial({ groupId: true }).extend({ id: z.string().min(1) }).safeParse(body); if(!parsed.success) return NextResponse.json({error:"INVALID_VARIANT"},{status:400}); await db.$transaction(async(tx)=>{ const before=(await tx.$queryRaw<any[]>`SELECT "sortOrder" FROM catalog_group_variants WHERE "groupId"=${parsed.data.groupId} AND "variantId"=${parsed.data.variantId}`)[0]; if(!before) throw new Error("NOT_FOUND"); await tx.$executeRaw`UPDATE catalog_group_variants SET "sortOrder"=COALESCE(${parsed.data.sortOrder ?? null},"sortOrder") WHERE "groupId"=${parsed.data.groupId} AND "variantId"=${parsed.data.variantId}`; const after=(await tx.$queryRaw<any[]>`SELECT "sortOrder" FROM catalog_group_variants WHERE "groupId"=${parsed.data.groupId} AND "variantId"=${parsed.data.variantId}`)[0]; const changes=auditDiff(before,after); if(changes) await writeAuditLog(tx,actor,{action:"product_group.updated",entityType:"product_group",entityId:parsed.data.groupId!,changes}); }); return NextResponse.json({ok:true}); }
+    if (body.kind === "rule") { const current=await db.$queryRaw<any[]>`SELECT "groupId","brandId","globalProductTypeId","modelId","sortOrder","isActive" FROM catalog_group_rules WHERE id=${body.id} LIMIT 1`; if(!current.length) throw new Error("NOT_FOUND"); const rule=normalizeGroupRule({ ...current[0], ...body }); await validateGroupRuleReferences(db,rule); await db.$transaction(async(tx)=>{ await tx.$executeRaw`UPDATE catalog_group_rules SET "brandId"=${rule.brandId},"globalProductTypeId"=${rule.globalProductTypeId},"modelId"=${rule.modelId},"sortOrder"=${rule.sortOrder},"isActive"=${rule.isActive} WHERE id=${body.id}`; const changes=auditDiff(current[0],{...current[0],...rule}); if(changes) await writeAuditLog(tx,actor,{action:"product_group.updated",entityType:"product_group",entityId:current[0].groupId,changes:{rule:changes}}); }); return NextResponse.json({ok:true}); }
     return NextResponse.json({error:"INVALID_KIND"},{status:400});
   } catch(error){ return responseError(error); }
 }
 
 export async function DELETE(request: Request) {
-  try { await requireGlobalAdminMutation(request); const body=await request.json() as {kind?:string; id?:string; groupId?:string; productId?:string; variantId?:string}; const db=adminDb(); const schema=await groupSchema(db); groupSchemaRequired(schema); let result=0; if(body.kind === "group") result=await db.$executeRaw`DELETE FROM catalog_groups WHERE id=${body.id}`; else if(body.kind === "rule") result=await db.$executeRaw`DELETE FROM catalog_group_rules WHERE id=${body.id}`; else if(body.kind === "product") result=await db.$executeRaw`DELETE FROM catalog_group_products WHERE "groupId"=${body.groupId} AND "productId"=${body.productId}`; else if(body.kind === "variant") { groupVariantSchemaRequired(schema); result=await db.$executeRaw`DELETE FROM catalog_group_variants WHERE "groupId"=${body.groupId} AND "variantId"=${body.variantId}`; } else return NextResponse.json({error:"INVALID_KIND"},{status:400}); if(!result) throw new Error("NOT_FOUND"); return NextResponse.json({ok:true}); } catch(error){ return responseError(error); }
+  try { const actor=await requireGlobalAdminMutation(request); const body=await request.json() as {kind?:string; id?:string; groupId?:string; productId?:string; variantId?:string}; const db=adminDb(); const schema=await groupSchema(db); groupSchemaRequired(schema); await db.$transaction(async(tx)=>{ let result=0; let entityId=body.id ?? body.groupId ?? ""; if(body.kind === "group") result=await tx.$executeRaw`DELETE FROM catalog_groups WHERE id=${body.id}`; else if(body.kind === "rule") result=await tx.$executeRaw`DELETE FROM catalog_group_rules WHERE id=${body.id}`; else if(body.kind === "product") result=await tx.$executeRaw`DELETE FROM catalog_group_products WHERE "groupId"=${body.groupId} AND "productId"=${body.productId}`; else if(body.kind === "variant") { groupVariantSchemaRequired(schema); result=await tx.$executeRaw`DELETE FROM catalog_group_variants WHERE "groupId"=${body.groupId} AND "variantId"=${body.variantId}`; } else throw new Error("INVALID_KIND"); if(!result) throw new Error("NOT_FOUND"); await writeAuditLog(tx,actor,{action:"product_group.deleted",entityType:"product_group",entityId:entityId,changes:{deleted:{old:true,new:null}},metadata:{kind:body.kind}}); }); return NextResponse.json({ok:true}); } catch(error){ return responseError(error); }
 }

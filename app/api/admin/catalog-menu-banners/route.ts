@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireGlobalAdminMutation, requireGlobalAdminSession } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
+import { auditDiff, writeAuditLog } from "@/lib/admin-audit";
 import { CATALOG_MENU_ROOTS, parseCatalogMenuBanners } from "@/lib/catalog-menu-banners";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +34,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    await requireGlobalAdminMutation(request);
+    const actor = await requireGlobalAdminMutation(request);
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_MENU_BANNERS" }, { status: 400 });
     const banners = parsed.data.banners;
@@ -43,11 +44,17 @@ export async function PUT(request: Request) {
       const rows = await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id=ANY(${mediaIds}::text[]) AND "mimeType" IN ('image/jpeg','image/png','image/webp')`;
       if (new Set(rows.map((row) => row.id)).size !== new Set(mediaIds).size) return NextResponse.json({ error: "INVALID_MEDIA" }, { status: 400 });
     }
-    await db.$executeRaw`
-      INSERT INTO settings (id,key,value,description,"updatedAt")
-      VALUES (${newId()},'catalog.megaMenuBanners',${JSON.stringify({ banners })}::jsonb,'Legacy catalog mega-menu banners',NOW())
-      ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,"updatedAt"=NOW()
-    `;
+    await db.$transaction(async (tx) => {
+      const before = (await tx.$queryRaw<Array<{ value: unknown }>>`SELECT value FROM settings WHERE key='catalog.megaMenuBanners' LIMIT 1`)[0]?.value ?? null;
+      const next = { banners };
+      await tx.$executeRaw`
+        INSERT INTO settings (id,key,value,description,"updatedAt")
+        VALUES (${newId()},'catalog.megaMenuBanners',${JSON.stringify(next)}::jsonb,'Legacy catalog mega-menu banners',NOW())
+        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,"updatedAt"=NOW()
+      `;
+      const changes = auditDiff(before, next);
+      if (changes) await writeAuditLog(tx, actor, { action: "catalog_menu.updated", entityType: "catalog_menu_banners", entityId: "catalog.megaMenuBanners", changes, metadata: { settingKey: "catalog.megaMenuBanners" } });
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
