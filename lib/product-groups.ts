@@ -74,10 +74,9 @@ export async function countGroupProducts(db: GroupDb, groupId: string, citySlug:
         OR EXISTS (
           SELECT 1 FROM catalog_group_rules gr
           LEFT JOIN product_models pm ON pm.id=p."modelId"
-          LEFT JOIN legacy_product_type_mappings lpm ON lpm."legacyProductTypeId"=p."productTypeId"
           WHERE gr."groupId"=${groupId} AND gr."isActive"=TRUE
             AND (gr."brandId" IS NULL OR gr."brandId"=p."brandId")
-            AND (gr."globalProductTypeId" IS NULL OR gr."globalProductTypeId"=lpm."globalProductTypeId")
+            AND (gr."globalProductTypeId" IS NULL OR gr."globalProductTypeId"=p."globalProductTypeId")
             AND (gr."modelId" IS NULL OR gr."modelId"=p."modelId")
         )
       )`;
@@ -97,10 +96,9 @@ export function groupRuleWhere(groupId: string, includeVariants = false) {
     ${variants}
     OR EXISTS (
       SELECT 1 FROM catalog_group_rules gr
-      LEFT JOIN legacy_product_type_mappings lpm ON lpm."legacyProductTypeId"=p0."productTypeId"
       WHERE gr."groupId"=${groupId} AND gr."isActive"=TRUE
         AND (gr."brandId" IS NULL OR gr."brandId"=p0."brandId")
-        AND (gr."globalProductTypeId" IS NULL OR gr."globalProductTypeId"=lpm."globalProductTypeId")
+        AND (gr."globalProductTypeId" IS NULL OR gr."globalProductTypeId"=p0."globalProductTypeId")
         AND (gr."modelId" IS NULL OR gr."modelId"=p0."modelId")
     )
   )`;
@@ -112,10 +110,9 @@ export function groupVariantWhere(groupId: string, includeVariants: boolean) {
     EXISTS (SELECT 1 FROM catalog_group_products gp WHERE gp."groupId"=${groupId} AND gp."productId"=p.id)
     OR EXISTS (
       SELECT 1 FROM catalog_group_rules gr
-      LEFT JOIN legacy_product_type_mappings lpm ON lpm."legacyProductTypeId"=p."productTypeId"
       WHERE gr."groupId"=${groupId} AND gr."isActive"=TRUE
         AND (gr."brandId" IS NULL OR gr."brandId"=p."brandId")
-        AND (gr."globalProductTypeId" IS NULL OR gr."globalProductTypeId"=lpm."globalProductTypeId")
+        AND (gr."globalProductTypeId" IS NULL OR gr."globalProductTypeId"=p."globalProductTypeId")
         AND (gr."modelId" IS NULL OR gr."modelId"=p."modelId")
     )
     OR EXISTS (SELECT 1 FROM catalog_group_variants gv WHERE gv."groupId"=${groupId} AND gv."variantId"=pv.id)

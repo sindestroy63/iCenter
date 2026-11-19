@@ -22,7 +22,7 @@ export async function GET() {
           OR EXISTS(SELECT 1 FROM services s WHERE s."imageMediaId" = m.id)
           OR EXISTS(SELECT 1 FROM users u WHERE u."avatarMediaId" = m.id)
           OR EXISTS(SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenuBanners' AND setting.value @> jsonb_build_object('banners',jsonb_build_array(jsonb_build_object('imageMediaId',m.id))))
-          OR EXISTS(SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenu' AND setting.value @> jsonb_build_object('items',jsonb_build_array(jsonb_build_object('banner',jsonb_build_object('imageMediaId',m.id)))))) AS used
+          OR EXISTS(SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenu' AND (setting.value @> jsonb_build_object('items',jsonb_build_array(jsonb_build_object('banner',jsonb_build_object('imageMediaId',m.id)))) OR setting.value @> jsonb_build_object('items',jsonb_build_array(jsonb_build_object('promoBanner',jsonb_build_object('imageMediaId',m.id))))))) AS used
       FROM media m ORDER BY m."uploadedAt" DESC
     `;
     return NextResponse.json({ data: rows.map((row) => ({ ...row, url: `/${row.storagePath}` })) });

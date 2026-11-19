@@ -7,7 +7,7 @@ import { writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
-const roles = ["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"] as const;
+const roles = ["ADMIN", "DEVELOPER", "CITY_MANAGER"] as const;
 const editorSchema = z.object({
   name: z.string().trim().min(1).max(160),
   email: z.string().trim().email().max(320),
@@ -60,7 +60,6 @@ export async function POST(request: Request) {
     const parsed = editorSchema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_EMPLOYEE" }, { status: 400 });
     const value = parsed.data;
-    if (value.role === "OWNER") throw new Error("OWNER_CREATION_DISABLED");
     if (value.role !== "CITY_MANAGER" && (value.allCities || value.allCitiesCanManagePrices || value.allCitiesCanManageStock)) throw new Error("GLOBAL_ROLE_CANNOT_HAVE_CITY_GRANTS");
     if (!value.allCities && (value.allCitiesCanManagePrices || value.allCitiesCanManageStock)) throw new Error("ALL_CITIES_REQUIRED");
     const email = value.email.toLowerCase();
@@ -75,7 +74,7 @@ export async function POST(request: Request) {
       const allCitiesCanManagePrices = allCities && value.allCitiesCanManagePrices;
       const allCitiesCanManageStock = allCities && value.allCitiesCanManageStock;
       const cities = await validateCities(tx, value.role, value.citySlugs, allCities, value.cityGrants);
-      await tx.$executeRaw`INSERT INTO users (id,email,"passwordHash",role,name,"isActive","mustChangePassword","allCities","allCitiesCanManagePrices","allCitiesCanManageStock","createdAt","updatedAt") VALUES (${id},${email},${passwordHash},${value.role}::"UserRole",${value.name},TRUE,TRUE,${allCities},${allCitiesCanManagePrices},${allCitiesCanManageStock},NOW(),NOW())`;
+      await tx.$executeRaw`INSERT INTO users (id,email,"passwordHash",role,name,"isActive","mustChangePassword","allCities","allCitiesCanManagePrices","allCitiesCanManageStock","createdAt","updatedAt") VALUES (${id},${email},${passwordHash},${value.role}::"UserRole",${value.name},TRUE,FALSE,${allCities},${allCitiesCanManagePrices},${allCitiesCanManageStock},NOW(),NOW())`;
       for (const city of cities) await tx.$executeRaw`INSERT INTO user_city_access (id,"userId","cityId","canManagePrices","canManageStock","createdAt") VALUES (${newId()},${id},${city.id},${city.canManagePrices},${city.canManageStock},NOW())`;
       await writeAuditLog(tx, actor, {
         action: "user.created",
@@ -101,19 +100,13 @@ export async function PATCH(request: Request) {
       if (!target) throw new Error("NOT_FOUND");
       if (value.id === actor.userId && value.active === false) throw new Error("FORBIDDEN");
       if (value.id === actor.userId && (value.role !== undefined || value.citySlugs !== undefined || value.cityGrants !== undefined || value.allCities !== undefined || value.allCitiesCanManagePrices !== undefined || value.allCitiesCanManageStock !== undefined)) throw new Error("FORBIDDEN");
-      if (actor.role !== "OWNER" && target.role === "OWNER") throw new Error("FORBIDDEN");
       const nextRole = value.role ?? target.role;
-      if (actor.role !== "OWNER" && nextRole === "OWNER") throw new Error("FORBIDDEN");
       const nextActive = value.active ?? target.active;
       const nextAllCities = nextRole === "CITY_MANAGER" ? value.allCities ?? target.allCities : false;
       const nextAllCitiesCanManagePrices = nextAllCities ? value.allCitiesCanManagePrices ?? target.allCitiesCanManagePrices : false;
       const nextAllCitiesCanManageStock = nextAllCities ? value.allCitiesCanManageStock ?? target.allCitiesCanManageStock : false;
       if (nextRole !== "CITY_MANAGER" && (value.allCities === true || value.allCitiesCanManagePrices === true || value.allCitiesCanManageStock === true)) throw new Error("GLOBAL_ROLE_CANNOT_HAVE_CITY_GRANTS");
       if (!nextAllCities && (value.allCitiesCanManagePrices === true || value.allCitiesCanManageStock === true)) throw new Error("ALL_CITIES_REQUIRED");
-      if (target.role === "OWNER" && target.active && (nextRole !== "OWNER" || !nextActive)) {
-        const [count] = await tx.$queryRaw<any[]>`SELECT count(*)::int AS count FROM users WHERE role='OWNER'::"UserRole" AND "isActive"=TRUE`;
-        if (Number(count.count) <= 1) throw new Error("LAST_ACTIVE_OWNER");
-      }
       const replaceCityGrants = value.citySlugs !== undefined || (value.role !== undefined && value.role !== target.role);
       const oldGrants = await tx.$queryRaw<any[]>`SELECT "cityId","canManagePrices","canManageStock" FROM user_city_access WHERE "userId"=${value.id} ORDER BY "cityId"`;
       const cities = replaceCityGrants ? await validateCities(tx, nextRole, value.citySlugs ?? [], nextAllCities, value.cityGrants) : null;

@@ -44,7 +44,7 @@ async function save(request: Request, update: boolean) {
       : brandTitle
         ? { ...submitted, title: brandTitle, subtitle: null, linkUrl: null, linkText: null }
         : submitted;
-    if (value.linkUrl && !((value.linkUrl.startsWith("/") && !value.linkUrl.startsWith("//")) || /^https:\/\//i.test(value.linkUrl))) return NextResponse.json({ error: "INVALID_LINK" }, { status: 400 });
+    if (value.linkUrl && !((value.linkUrl.startsWith("/") && !value.linkUrl.startsWith("//")) || /^https:\/\//i.test(value.linkUrl) || /^(group|product|category):[^\s:]+$/.test(value.linkUrl))) return NextResponse.json({ error: "INVALID_LINK" }, { status: 400 });
     const db = adminDb();
     if (value.imageMediaId) {
       const media = await db.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id=${value.imageMediaId} AND "mimeType" IN ('image/jpeg','image/png','image/webp','video/mp4','video/webm') LIMIT 1`;
@@ -63,6 +63,12 @@ async function save(request: Request, update: boolean) {
         return { id, created: false, found: count > 0 };
       }
 
+      if (value.placement === "home") {
+        const id = newId();
+        await tx.$executeRaw`INSERT INTO banners (id,placement,title,subtitle,"linkUrl","linkText","imageMediaId","sortOrder","isActive","createdAt","updatedAt") VALUES (${id},${value.placement},${value.title},${value.subtitle},${value.linkUrl},${value.linkText},${value.imageMediaId},${value.sortOrder},${value.isActive},NOW(),NOW())`;
+        await writeAuditLog(tx, actor, { action: "banner.created", entityType: "banner", entityId: id, changes: { old: null, new: { placement: value.placement, title: value.title, subtitle: value.subtitle, linkUrl: value.linkUrl, linkText: value.linkText, imageMediaId: value.imageMediaId, sortOrder: value.sortOrder, isActive: value.isActive } }, metadata: { placement: value.placement } });
+        return { id, created: true, found: true };
+      }
       await tx.$queryRaw<Array<{ locked: string }>>`SELECT pg_advisory_xact_lock(hashtext('icenter:banners'), hashtext(${value.placement}))::text AS locked`;
       const existing = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM banners WHERE placement=${value.placement} ORDER BY "isActive" DESC,"sortOrder",id LIMIT 1 FOR UPDATE`;
       const id = existing[0]?.id ?? newId();

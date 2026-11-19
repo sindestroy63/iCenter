@@ -1,17 +1,22 @@
 export type OrderNotification = {
   requestNumber: string;
   city: string;
+  status?: "NEW" | "ACCEPTED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
   name: string;
   phone: string;
   contactMethod?: string;
   fulfillment?: string;
   address?: string;
   comment?: string;
+  promoCode?: string | null;
+  subtotal?: number | null;
+  discount?: number | null;
   total: number;
   items: Array<{ productName: string; variant?: unknown; sku?: string; quantity: number; unitPrice: number }>;
 };
 
 export type LeadNotification = {
+  requestId?: string;
   requestType: "installment" | "trade_in";
   requestNumber: string;
   city: string;
@@ -64,6 +69,11 @@ function cityName(value: unknown) {
   const city = plain(value, 120);
   const names: Record<string, string> = { samara: "Самара", moscow: "Москва", "saint-petersburg": "Санкт-Петербург", orenburg: "Оренбург" };
   return names[city.toLocaleLowerCase("ru")] ?? city;
+}
+
+function orderStatusName(value: OrderNotification["status"]) {
+  const labels = { NEW: "Новая", ACCEPTED: "Принят", IN_PROGRESS: "В работе", COMPLETED: "Завершён", CANCELLED: "Отменён" };
+  return value ? labels[value] : "";
 }
 
 function normalizeForMatch(value: string) {
@@ -168,9 +178,19 @@ export function formatOrderNotification(order: OrderNotification) {
     { value: "💬 <b>Комментарий</b>", optional: true },
     { value: optional("Текст", order.comment, 500), optional: true },
   ] : [];
+  const promoCode = plain(order.promoCode, 64);
+  const discount = typeof order.discount === "number" && Number.isFinite(order.discount) ? order.discount : 0;
+  const subtotal = typeof order.subtotal === "number" && Number.isFinite(order.subtotal) ? order.subtotal : order.total + discount;
+  const promoSection: MessageLine[] = promoCode ? [
+    { value: "", optional: true, group: "promo" },
+    { value: `Промокод: <code>${escapeHtml(promoCode)}</code>`, optional: true, group: "promo" },
+    { value: `Товары до скидки: ${escapeHtml(money(subtotal))}`, optional: true, group: "promo" },
+    { value: `Скидка: −${escapeHtml(money(discount))}`, optional: true, group: "promo" },
+  ] : [];
   return finish([
     { value: "🛒 <b>НОВЫЙ ЗАКАЗ</b>" },
     { value: `№ <b>${escapeHtml(plain(order.requestNumber, 120))}</b> · 📍 ${escapeHtml(cityName(order.city))}` },
+    ...(order.status ? [{ value: `Статус: ${escapeHtml(orderStatusName(order.status))}`, optional: true }] : []),
     { value: "" },
     { value: "🛍️ <b>Товары</b>" },
     ...items,
@@ -183,6 +203,7 @@ export function formatOrderNotification(order: OrderNotification) {
     ...(deliveryFields.length ? [{ value: "🚚 <b>Получение</b>", optional: true }, ...deliveryFields] : []),
     ...commentSection,
     ...(deliveryFields.length || commentSection.length ? [{ value: "" }] : []),
+    ...promoSection,
     { value: `💰 <b>Итого: ${escapeHtml(money(order.total))}</b>` },
   ]);
 }

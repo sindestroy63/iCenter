@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useStoreState } from "./StoreState";
 import {
+  catalogAttributeLabel,
   productVariantImage,
   variantAttribute,
   type CatalogProductDto,
@@ -24,15 +25,19 @@ import {
 import {
   compareMemoryValues,
   dictionaryValuesMatch,
+  normalizeMemory,
 } from "@/lib/product-dictionaries";
 import { catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
 import {
+  catalogSearchProductIdentityMatches,
   expandCatalogSearchQuery,
   normalizeCatalogSearchQuery,
 } from "@/lib/catalog-search";
 import CatalogProductCard from "./CatalogProductCard";
 import ColorName from "./ColorName";
 import { catalogSectionTitle } from "@/lib/catalog-section-context";
+import { catalogProductCategoryHref } from "@/lib/catalog-menu";
+import { catalogProductMinPrices, catalogSortFromQuery, catalogSortQueryParam, compareCatalogPriceEntries, DEFAULT_CATALOG_SORT, type CatalogSort as CatalogSortValue } from "@/lib/catalog-sort";
 
 async function loadCatalogProducts(
   city: string,
@@ -58,7 +63,48 @@ async function loadCatalogProducts(
   return all;
 }
 
+type DynamicAttributeFacet = { code: string; label: string; values: string[] };
+type SelectedDynamicAttributes = Record<string, string[]>;
+
+const STANDARD_ATTRIBUTE_FILTERS = new Set([
+  "color",
+  "storage",
+  "memory",
+  "ram",
+  "sim",
+  "simType",
+  "connectivity",
+]);
+
+function normalizeAttributeValue(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("ru-RU");
+}
+
+function readDynamicAttributes(searchParams: URLSearchParams): SelectedDynamicAttributes {
+  const selected: SelectedDynamicAttributes = {};
+  for (const entry of searchParams.getAll("attribute")) {
+    const separator = entry.indexOf(":");
+    if (separator <= 0) continue;
+    const code = entry.slice(0, separator).trim();
+    const value = entry.slice(separator + 1).trim().replace(/\s+/g, " ");
+    if (!code || !value || STANDARD_ATTRIBUTE_FILTERS.has(code)) continue;
+    const values = selected[code] ?? [];
+    if (!values.some((current) => normalizeAttributeValue(current) === normalizeAttributeValue(value))) values.push(value);
+    selected[code] = values;
+  }
+  return selected;
+}
+
+function appendDynamicAttributes(params: URLSearchParams, selected: SelectedDynamicAttributes) {
+  for (const [code, values] of Object.entries(selected)) {
+    for (const value of values) params.append("attribute", `${code}:${value}`);
+  }
+}
+
 type CatalogEntry = { product: CatalogProductDto; variant: CatalogVariantDto };
+type CatalogMenuChild = { id: string; parentId: string | null; title: string; description?: string; visible: boolean; href: string | null; action: { type: "url"; href: string } | { type: "category"; categoryId: string } | { type: "group"; groupId: string } | { type: "filters"; rules: Array<{ field: "brand" | "type" | "category" | "model" | "tradeIn"; value: string | true }> } | null; productIds?: string[]; filters?: { brand?: string; type?: string; category?: string | null; modelId?: string } | null; children: CatalogMenuChild[]; banner?: { imageUrl: string | null; alt?: string } | null };
+type CatalogMenuSibling = { id: string; title: string; href: string | null; banner?: { imageUrl: string | null; alt?: string } | null };
+type CatalogModelNavigation = { typeHref: string; models: CatalogMenuSibling[]; selectedId: string | null };
 
 function catalogEntries(products: CatalogProductDto[]): CatalogEntry[] {
   const seen = new Set<string>();
@@ -71,13 +117,14 @@ function catalogEntries(products: CatalogProductDto[]): CatalogEntry[] {
   );
 }
 
-function ProductTile({ entry }: { entry: CatalogEntry }) {
+function ProductTile({ entry, categoryHref }: { entry: CatalogEntry; categoryHref?: string | null }) {
   const { city } = useStoreState();
   return (
     <CatalogProductCard
       product={entry.product}
       variantId={entry.variant.id}
       city={city}
+      categoryHref={categoryHref}
       layout="catalog"
     />
   );
@@ -109,19 +156,19 @@ function FilterGroup({
 }
 
 const sortOptions = [
+  ["priceAsc", "Сначала дешёвые"],
+  ["priceDesc", "Сначала дорогие"],
   ["name", "По названию"],
   ["category", "По категории"],
   ["new", "Сначала новинки"],
-  ["priceAsc", "Сначала дешёвые"],
-  ["priceDesc", "Сначала дорогие"],
 ] as const;
 
 function CatalogSort({
   value,
   onChange,
 }: {
-  value: string;
-  onChange: (value: string) => void;
+  value: CatalogSortValue;
+  onChange: (value: CatalogSortValue) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() =>
@@ -149,7 +196,7 @@ function CatalogSort({
     document.addEventListener("pointerdown", close);
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
-  const choose = (next: string) => {
+  const choose = (next: CatalogSortValue) => {
     onChange(next);
     setOpen(false);
   };
@@ -223,6 +270,7 @@ function entryMatchesSearch(entry: CatalogEntry, query: string) {
   const normalized = normalizeCatalogSearchQuery(query);
   if (!normalized) return true;
   const { product, variant } = entry;
+  if (!catalogSearchProductIdentityMatches([product.brand.name, product.name, product.model, product.generation].filter(Boolean).join(" "), query)) return false;
   const haystack = normalizeCatalogSearchQuery(
     [
       product.name,
@@ -280,6 +328,7 @@ export default function CatalogView({
   typeFilter = "",
   section = "",
   menuItem = "",
+  browse = "",
   modelId = "",
   scopeBrand = "",
   scopeCategory = "",
@@ -296,16 +345,19 @@ export default function CatalogView({
   typeFilter?: string;
   section?: string;
   menuItem?: string;
+  browse?: string;
   modelId?: string;
   scopeBrand?: string;
   scopeCategory?: string;
   scopeType?: string;
 }) {
   const { city, toggleFavorite, isFavorite } = useStoreState();
-  const [search, setSearch] = useState(query);
+  const pathname = usePathname();
+  const isSearchPage = pathname === "/search";
+  const [search, setSearch] = useState(isSearchPage ? query : "");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [mobileFilters, setMobileFilters] = useState(false);
-  const [sort, setSort] = useState("name");
+  const [sort, setSort] = useState<CatalogSortValue>(DEFAULT_CATALOG_SORT);
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [urlReady, setUrlReady] = useState(false);
@@ -320,10 +372,12 @@ export default function CatalogView({
   const [selectedConnectivity, setSelectedConnectivity] = useState("");
   const [selectedModelId, setSelectedModelId] = useState(modelId);
   const [selectedAvailability, setSelectedAvailability] = useState("");
+  const [selectedDynamicAttributes, setSelectedDynamicAttributes] = useState<SelectedDynamicAttributes>({});
   const [products, setProducts] = useState<CatalogProductDto[]>([]);
   const [catalogUniverse, setCatalogUniverse] = useState<CatalogProductDto[]>(
     [],
   );
+  const [catalogUniverseLoaded, setCatalogUniverseLoaded] = useState(false);
   const [categoryOptions, setCategoryOptions] = useState<[string, string][]>(
     [],
   );
@@ -331,7 +385,6 @@ export default function CatalogView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
-  const pathname = usePathname();
   const [brandOptions, setBrandOptions] = useState<[string, string][]>([]);
   const searchRef = useRef<HTMLDivElement>(null);
   const [menuTitle, setMenuTitle] = useState("");
@@ -342,13 +395,16 @@ export default function CatalogView({
     modelId?: string;
   } | null>(null);
   const [menuScopeLoaded, setMenuScopeLoaded] = useState(false);
+  const [catalogMenu, setCatalogMenu] = useState<CatalogMenuChild[]>([]);
   const [menuCleared, setMenuCleared] = useState(false);
+  const [menuNode, setMenuNode] = useState<{ id: string; title: string; description?: string; href: string | null; action?: CatalogMenuChild["action"]; filters?: { brand?: string; type?: string; category?: string | null; modelId?: string } | null; children: CatalogMenuChild[]; siblings: CatalogMenuSibling[]; parent: { title: string; href: string; filters?: CatalogMenuChild["filters"]; action?: CatalogMenuChild["action"] } | null; path: Array<{ id: string; title: string; href: string | null }>; modelNavigation: CatalogModelNavigation | null } | null>(null);
   const effectiveMenuItem = menuCleared ? "" : menuItem;
+  const browsingChildren = Boolean(menuItem && browse === menuItem && menuNode?.filters?.type);
   const pageTitle = menuTitle || catalogSectionTitle(section) || title;
 
   useEffect(() => {
-    setSearch(query);
-  }, [query]);
+    setSearch(isSearchPage ? query : "");
+  }, [isSearchPage, query]);
   useEffect(() => {
     setSelectedCategory(category);
   }, [category]);
@@ -371,23 +427,63 @@ export default function CatalogView({
     setSelectedType(typeFilter);
   }, [typeFilter]);
   useEffect(() => {
-    if (!menuItem) {
-      setMenuTitle("");
-      setMenuScope(null);
-      setMenuScopeLoaded(false);
-      return;
-    }
     const controller = new AbortController();
+    setMenuScopeLoaded(false);
+    setMenuNode(null);
     fetch(`/api/catalog/menu?city=${encodeURIComponent(city)}`, {
       signal: controller.signal,
       cache: "no-store",
     })
       .then((response) => (response.ok ? response.json() : Promise.reject()))
       .then((body) => {
-        type MenuScopeNode = { id: string; title: string; filters?: { brand?: string; type?: string; category?: string | null; modelId?: string } | null; children?: MenuScopeNode[] };
+        type MenuScopeNode = CatalogMenuChild;
         const roots = Array.isArray(body.data) ? body.data as MenuScopeNode[] : [];
-        const findNode = (nodes: MenuScopeNode[]): MenuScopeNode | undefined => { for (const node of nodes) { if (node.id === menuItem) return node; const nested = findNode(node.children ?? []); if (nested) return nested; } return undefined; };
-        const node = findNode(roots);
+        setCatalogMenu(roots);
+        const findPath = (nodes: MenuScopeNode[], path: MenuScopeNode[] = []): MenuScopeNode[] | null => { for (const node of nodes) { const next = [...path, node]; if (node.id === menuItem) return next; const nested = findPath(node.children ?? [], next); if (nested) return nested; } return null; };
+        const normalizeBrand = (value: string | undefined) => value?.trim().toLocaleLowerCase("ru-RU") ?? "";
+        const requestedBrand = normalizeBrand(brand);
+        const nodeMatchesBrand = (node: MenuScopeNode): boolean => {
+          const candidates = [node.filters?.brand, node.title].filter(Boolean).map((value) => normalizeBrand(value));
+          if (candidates.some((value) => value === requestedBrand || value.includes(requestedBrand) || requestedBrand.includes(value))) return true;
+          return false;
+        };
+        const findBrandPath = (nodes: MenuScopeNode[], path: MenuScopeNode[] = []): MenuScopeNode[] | null => { for (const node of nodes) { const next = [...path, node]; if (nodeMatchesBrand(node)) return next; const nested = findBrandPath(node.children ?? [], next); if (nested) return nested; } return null; };
+        const path = menuItem ? findPath(roots) : brand ? findBrandPath(roots) : [];
+        const node = path?.at(-1);
+        const parentNode = path && path.length > 1 ? path[path.length - 2] : null;
+        const grandparentNode = path && path.length > 2 ? path[path.length - 3] : null;
+        const isTypeWithModels = (candidate: MenuScopeNode | null | undefined): candidate is MenuScopeNode => Boolean(
+          candidate?.action?.type === "filters" && candidate.action.rules.some((rule) => rule.field === "brand") &&
+          candidate.filters?.brand && (candidate.filters.type || candidate.filters.category) &&
+          candidate.children.some((child) => child.visible && (child.action?.type === "group" || child.filters?.modelId || (child.action?.type === "filters" && child.action.rules.some((rule) => rule.field === "model")))),
+        );
+        const isModelTerminal = Boolean(
+          node && parentNode && grandparentNode && node.children.length === 0 &&
+          (node.action?.type === "group" || node.filters?.modelId || (node.action?.type === "filters" && node.action.rules.some((rule) => rule.field === "model"))) &&
+          (parentNode.filters?.type || parentNode.filters?.category) && grandparentNode.filters?.brand &&
+          parentNode.filters.brand === grandparentNode.filters.brand && !grandparentNode.filters.type && !grandparentNode.filters.category,
+        );
+        const parent = parentNode
+          ? {
+              title: isModelTerminal && grandparentNode ? grandparentNode.title : parentNode.title,
+              href: isModelTerminal && grandparentNode
+                ? `/catalog?menuItem=${encodeURIComponent(grandparentNode.id)}`
+                : `/catalog?menuItem=${encodeURIComponent(parentNode.id)}&browse=${encodeURIComponent(parentNode.id)}`,
+              filters: isModelTerminal && grandparentNode ? grandparentNode.filters : parentNode.filters,
+              action: isModelTerminal && grandparentNode ? grandparentNode.action : parentNode.action,
+            }
+          : (node ? { title: "Каталог", href: "/catalog" } : null);
+        const siblingSource = parentNode?.children ?? roots;
+        const siblings = node ? siblingSource.filter((entry) => entry.id !== node.id).map((entry) => ({ id: entry.id, title: entry.title, href: entry.href, banner: entry.banner })) : [];
+        const typeNode = isTypeWithModels(node) ? node : isTypeWithModels(parentNode) ? parentNode : null;
+        const modelNavigation = typeNode ? {
+          typeHref: typeNode.href ?? `/catalog?menuItem=${encodeURIComponent(typeNode.id)}`,
+          models: typeNode.children.filter((child) => child.visible && (child.action?.type === "group" || child.filters?.modelId || (child.action?.type === "filters" && child.action.rules.some((rule) => rule.field === "model")))).map((child) => ({ id: child.id, title: child.title, href: child.href, banner: child.banner })),
+          selectedId: node?.id === typeNode.id ? null : node?.id ?? null,
+        } : null;
+        setMenuNode(node
+          ? { id: node.id, title: node.title, description: node.description, href: node.href, action: node.action, filters: node.filters, children: (node.children ?? []) as CatalogMenuChild[], siblings, parent, path: path!.map((entry) => ({ id: entry.id, title: entry.title, href: entry.href })), modelNavigation }
+          : !menuItem && !brand ? { id: "catalog-root", title: "Каталог", description: "", href: null, children: roots as CatalogMenuChild[], siblings: [], parent: null, path: [], modelNavigation: null } : null);
         setMenuTitle(node?.title ?? "Каталог");
         setMenuScope(
           node?.filters
@@ -404,12 +500,14 @@ export default function CatalogView({
       .catch(() => {
         if (!controller.signal.aborted) {
           setMenuTitle("Каталог");
+          setCatalogMenu([]);
           setMenuScope(null);
+          setMenuNode(!menuItem && !brand ? { id: "catalog-root", title: "Каталог", description: "", href: null, children: [], siblings: [], parent: null, path: [], modelNavigation: null } : null);
           setMenuScopeLoaded(true);
         }
       });
     return () => controller.abort();
-  }, [city, menuItem]);
+  }, [city, menuItem, brand]);
   useEffect(() => {
     if (!menuItem || !menuScopeLoaded || !menuScope) return;
     setSelectedBrand(menuScope.brand ?? "");
@@ -417,6 +515,21 @@ export default function CatalogView({
     setSelectedCategory(menuScope.category ?? "");
     setSelectedModelId(menuScope.modelId ?? "");
   }, [menuItem, menuScopeLoaded, menuScope]);
+  useEffect(() => {
+    setMenuCleared(false);
+    setSelectedBrand("");
+    setSelectedType("");
+    setSelectedCategory("");
+    setSelectedModelId("");
+    setSelectedMemory("");
+    setSelectedColor("");
+    setSelectedSim("");
+    setSelectedRam("");
+    setSelectedConnectivity("");
+    setSelectedAvailability("");
+    setMinPrice("");
+    setMaxPrice("");
+  }, [menuItem]);
   useEffect(() => { setSelectedModelId(modelId); }, [modelId]);
   useEffect(() => {
     if (!showSuggestions) return;
@@ -448,17 +561,12 @@ export default function CatalogView({
   }, [mobileFilters]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const initialSort = params.get("sort");
-    if (
-      ["name", "category", "new", "priceAsc", "priceDesc"].includes(
-        initialSort ?? "",
-      )
-    )
-      setSort(initialSort!);
+    setSort(catalogSortFromQuery(params.get("sort")));
     setMinPrice(params.get("minPrice") ?? "");
     setMaxPrice(params.get("maxPrice") ?? "");
     setSelectedConnectivity(params.get("connectivity") ?? "");
     setSelectedAvailability(params.get("availability") ?? "");
+    setSelectedDynamicAttributes(readDynamicAttributes(params));
     setUrlReady(true);
   }, []);
   useEffect(() => {
@@ -523,21 +631,29 @@ export default function CatalogView({
   }, []);
   useEffect(() => {
     const controller = new AbortController();
+    setCatalogUniverseLoaded(false);
     const filters = new URLSearchParams();
+    if (isSearchPage && search.trim()) filters.set("q", search.trim());
+    if (selectedCategory) filters.set("category", selectedCategory);
+    if (selectedBrand) filters.set("brand", selectedBrand);
+    if (selectedType) filters.set("type", selectedType);
+    if (scopeBrand) filters.set("scopeBrand", scopeBrand);
+    if (scopeCategory) filters.set("scopeCategory", scopeCategory);
+    if (scopeType) filters.set("scopeType", scopeType);
     if (effectiveMenuItem) filters.set("menuItem", effectiveMenuItem);
     if (selectedModelId) filters.set("modelId", selectedModelId);
     loadCatalogProducts(city, controller.signal, filters)
-      .then(setCatalogUniverse)
+      .then((data) => { setCatalogUniverse(data); setCatalogUniverseLoaded(true); })
       .catch((cause: unknown) => {
         if (!(cause instanceof DOMException && cause.name === "AbortError"))
-          setCatalogUniverse([]);
+          { setCatalogUniverse([]); setCatalogUniverseLoaded(true); }
       });
     return () => controller.abort();
-  }, [city, effectiveMenuItem, selectedModelId]);
+  }, [city, isSearchPage, search, selectedCategory, selectedBrand, selectedType, scopeBrand, scopeCategory, scopeType, effectiveMenuItem, selectedModelId]);
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams();
-    if (search.trim()) params.set("q", search.trim());
+    if (isSearchPage && search.trim()) params.set("q", search.trim());
     if (selectedCategory) params.set("category", selectedCategory);
     if (selectedBrand)
       params.set(
@@ -557,6 +673,7 @@ export default function CatalogView({
     if (selectedColor) params.set("color", selectedColor);
     if (selectedRam) params.set("ram", selectedRam);
     if (selectedSim) params.set("sim", selectedSim);
+    appendDynamicAttributes(params, selectedDynamicAttributes);
     setLoading(true);
     setError(false);
     loadCatalogProducts(city, controller.signal, params)
@@ -573,6 +690,7 @@ export default function CatalogView({
     return () => controller.abort();
   }, [
     city,
+    isSearchPage,
     search,
     selectedCategory,
     selectedBrand,
@@ -582,6 +700,7 @@ export default function CatalogView({
     selectedColor,
     selectedSim,
     selectedRam,
+    selectedDynamicAttributes,
     effectiveMenuItem,
     selectedModelId,
     scopeBrand,
@@ -593,14 +712,16 @@ export default function CatalogView({
 
   useEffect(() => {
     if (!urlReady) return;
+    const isSeoCatalogPath = pathname.startsWith("/catalog/");
     const params = new URLSearchParams();
     if (section) params.set("section", section);
     if (scopeBrand) params.set("scopeBrand", scopeBrand);
     if (scopeCategory) params.set("scopeCategory", scopeCategory);
     if (scopeType) params.set("scopeType", scopeType);
-    if (effectiveMenuItem) params.set("menuItem", effectiveMenuItem);
-    if (selectedModelId) params.set("modelId", selectedModelId);
-    if (search.trim()) params.set("q", search.trim());
+    if (!isSeoCatalogPath && effectiveMenuItem) params.set("menuItem", effectiveMenuItem);
+    if (!isSeoCatalogPath && browsingChildren) params.set("browse", menuItem);
+    if (!isSeoCatalogPath && selectedModelId) params.set("modelId", selectedModelId);
+    if (isSearchPage && search.trim()) params.set("q", search.trim());
     if (selectedCategory) params.set("category", selectedCategory);
     if (selectedBrand) params.set("brand", selectedBrand);
     if (selectedType) params.set("type", selectedType);
@@ -610,12 +731,14 @@ export default function CatalogView({
     if (selectedRam) params.set("ram", selectedRam);
     if (selectedConnectivity) params.set("connectivity", selectedConnectivity);
     if (selectedAvailability) params.set("availability", selectedAvailability);
+    appendDynamicAttributes(params, selectedDynamicAttributes);
     const min = parsePrice(minPrice);
     const max = parsePrice(maxPrice);
     if (min !== null) params.set("minPrice", String(min));
     if (max !== null) params.set("maxPrice", String(max));
-    if (sort !== "name") params.set("sort", sort);
-    const basePath = pathname === "/search" ? "/search" : "/catalog";
+    const sortParam = catalogSortQueryParam(sort);
+    if (sortParam) params.set("sort", sortParam);
+    const basePath = pathname === "/search" ? "/search" : isSeoCatalogPath ? pathname : "/catalog";
     const nextUrl = `${basePath}${params.size ? `?${params}` : ""}`;
     if (`${window.location.pathname}${window.location.search}` !== nextUrl)
       window.history.replaceState(null, "", nextUrl);
@@ -624,10 +747,13 @@ export default function CatalogView({
     pathname,
     section,
     effectiveMenuItem,
+    browsingChildren,
+    menuItem,
     selectedModelId,
     scopeBrand,
     scopeCategory,
     scopeType,
+    isSearchPage,
     search,
     selectedCategory,
     selectedBrand,
@@ -638,12 +764,13 @@ export default function CatalogView({
     selectedRam,
     selectedConnectivity,
     selectedAvailability,
+    selectedDynamicAttributes,
     minPrice,
     maxPrice,
     sort,
   ]);
 
-  const optionProducts = catalogUniverse.length ? catalogUniverse : products;
+  const optionProducts = effectiveMenuItem ? catalogUniverse : catalogUniverseLoaded ? catalogUniverse : products;
   const categories = useMemo(
     () =>
       categoryOptions.length
@@ -667,16 +794,15 @@ export default function CatalogView({
     [optionProducts, brandOptions],
   );
   const memories = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          optionProducts.flatMap((p) =>
-            p.variants
-              .map((v) => variantAttribute(v, "storage"))
-              .filter(Boolean),
-          ),
-        ),
-      ).sort(compareMemoryValues),
+    () => {
+      const options = new Map<string, string>();
+      for (const value of optionProducts.flatMap((product) => product.variants.map((variant) => variantAttribute(variant, "storage")).filter(Boolean))) {
+        const normalized = normalizeMemory(value);
+        const key = normalized?.canonicalKey ?? value.trim().toLocaleLowerCase("ru-RU");
+        if (!options.has(key)) options.set(key, normalized?.label ?? value.trim());
+      }
+      return Array.from(options.values()).sort(compareMemoryValues);
+    },
     [optionProducts],
   );
   const colors = useMemo(
@@ -733,7 +859,31 @@ export default function CatalogView({
       ),
     [optionProducts],
   );
-  const additionalFilters: Array<[string, string[]]> = [];
+  const dynamicAttributeFacets = useMemo<DynamicAttributeFacet[]>(() => {
+    const facets = new Map<string, { label: string; values: Map<string, string> }>();
+    for (const product of optionProducts) {
+      for (const variant of product.variants) {
+        for (const [code, rawValue] of Object.entries(variant.attributes ?? {})) {
+          if (STANDARD_ATTRIBUTE_FILTERS.has(code)) continue;
+          if (typeof rawValue !== "string" && typeof rawValue !== "number" && typeof rawValue !== "boolean") continue;
+          const value = String(rawValue).trim().replace(/\s+/g, " ");
+          if (!value) continue;
+          const facet = facets.get(code) ?? {
+            label: variant.attributeLabels?.[code]?.trim() || catalogAttributeLabel(code),
+            values: new Map<string, string>(),
+          };
+          const normalized = normalizeAttributeValue(value);
+          if (!facet.values.has(normalized)) facet.values.set(normalized, value);
+          facets.set(code, facet);
+        }
+      }
+    }
+    return Array.from(facets, ([code, facet]) => ({
+      code,
+      label: facet.label,
+      values: Array.from(facet.values.values()).sort((left, right) => left.localeCompare(right, "ru", { numeric: true })),
+    })).filter((facet) => facet.values.length > 0).sort((left, right) => left.label.localeCompare(right.label, "ru"));
+  }, [optionProducts]);
   const connectivityOptions = useMemo(
     () =>
       Array.from(
@@ -747,11 +897,20 @@ export default function CatalogView({
       ).sort((a, b) => a.localeCompare(b, "ru")),
     [optionProducts],
   );
+  const availabilityOptions = useMemo(() => Array.from(new Set(optionProducts.flatMap((product) => product.variants.map((variant) => variant.availability).filter(Boolean)))), [optionProducts]);
   const productEntries = useMemo(() => catalogEntries(products), [products]);
   const universeEntries = useMemo(
     () => catalogEntries(optionProducts),
     [optionProducts],
   );
+  const hasPriceFacet = universeEntries.some(({ variant }) => variantPrice(variant) !== null);
+  const hasMemoryFacet = memories.length > 1;
+  const hasColorFacet = colors.length > 1;
+  const hasSimFacet = sims.length > 1;
+  const hasRamFacet = rams.length > 1;
+  const hasConnectivityFacet = connectivityOptions.length > 1;
+  const hasAvailabilityFacet = availabilityOptions.filter((value) => value !== "UNSPECIFIED").length > 1;
+  const hasCatalogFacets = hasPriceFacet || hasMemoryFacet || hasColorFacet || hasSimFacet || hasRamFacet || hasConnectivityFacet || hasAvailabilityFacet || dynamicAttributeFacets.length > 0 || (!effectiveMenuItem && (categories.length > 1 || brands.length > 1 || types.length > 1));
   const minPriceValue = parsePrice(minPrice);
   const maxPriceValue = parsePrice(maxPrice);
   const invalidPriceRange =
@@ -759,9 +918,8 @@ export default function CatalogView({
     maxPriceValue !== null &&
     minPriceValue > maxPriceValue;
   const filtered = useMemo(
-    () =>
-      productEntries
-        .filter(({ product, variant }) => {
+    () => {
+      const entries = productEntries.filter(({ product, variant }) => {
           if (!entryMatchesSearch({ product, variant }, search)) return false;
           if (
             selectedMemory &&
@@ -807,6 +965,11 @@ export default function CatalogView({
             variant.availability !== selectedAvailability
           )
             return false;
+          if (Object.entries(selectedDynamicAttributes).some(([code, values]) => {
+            const rawActual = variant.attributes?.[code];
+            const actual = typeof rawActual === "string" || typeof rawActual === "number" || typeof rawActual === "boolean" ? String(rawActual) : "";
+            return values.length > 0 && !values.some((value) => normalizeAttributeValue(value) === normalizeAttributeValue(actual));
+          })) return false;
           const price = variantPrice(variant);
           if (
             invalidPriceRange ||
@@ -817,8 +980,9 @@ export default function CatalogView({
           )
             return false;
           return true;
-        })
-        .sort((a, b) => {
+        });
+      const productPrices = catalogProductMinPrices(entries);
+      return entries.sort((a, b) => {
           if (sort === "name")
             return search.trim()
               ? 0
@@ -831,24 +995,14 @@ export default function CatalogView({
                 "ru",
               ) || a.product.name.localeCompare(b.product.name, "ru")
             );
-          if (sort === "priceAsc" || sort === "priceDesc") {
-            const left = variantPrice(a.variant);
-            const right = variantPrice(b.variant);
-            if (left === null)
-              return right === null
-                ? a.product.name.localeCompare(b.product.name, "ru")
-                : 1;
-            if (right === null) return -1;
-            return (
-              (sort === "priceAsc" ? left - right : right - left) ||
-              a.product.name.localeCompare(b.product.name, "ru")
-            );
-          }
+          if (sort === "priceAsc" || sort === "priceDesc")
+            return compareCatalogPriceEntries(a, b, sort, productPrices);
           return (
             Number(b.product.isNew) - Number(a.product.isNew) ||
             a.product.name.localeCompare(b.product.name, "ru")
           );
-        }),
+        });
+    },
     [
       productEntries,
       search,
@@ -859,6 +1013,7 @@ export default function CatalogView({
       selectedColor,
       selectedSim,
       selectedRam,
+      selectedDynamicAttributes,
       minPriceValue,
       maxPriceValue,
       invalidPriceRange,
@@ -867,17 +1022,19 @@ export default function CatalogView({
   );
   const suggestions = filtered.slice(0, 4);
   const reset = () => {
-    setMenuCleared(true);
     setSearch("");
-    setSelectedCategory("");
-    setSelectedBrand("");
-    setSelectedType("");
+    setMenuCleared(false);
+    setSelectedCategory(menuScope?.category ?? "");
+    setSelectedBrand(menuScope?.brand ?? "");
+    setSelectedType(menuScope?.type ?? "");
+    setSelectedModelId(menuScope?.modelId ?? "");
     setSelectedConnectivity("");
     setSelectedAvailability("");
     setSelectedMemory("");
     setSelectedColor("");
     setSelectedSim("");
     setSelectedRam("");
+    setSelectedDynamicAttributes({});
     setMinPrice("");
     setMaxPrice("");
     setShowSuggestions(false);
@@ -885,23 +1042,57 @@ export default function CatalogView({
   const chooseBrand = (value: string) => {
     if (menuScope?.brand && value !== menuScope.brand) setMenuCleared(true);
     setSelectedBrand(value);
+    setSelectedDynamicAttributes({});
   };
   const chooseType = (value: string) => {
     if (menuScope?.type && value !== menuScope.type) setMenuCleared(true);
     setSelectedType(value);
+    setSelectedDynamicAttributes({});
   };
   const chooseCategory = (value: string) => {
     if (menuScope?.category && value !== menuScope.category)
       setMenuCleared(true);
     setSelectedCategory(value);
+    setSelectedDynamicAttributes({});
+  };
+  const toggleDynamicAttribute = (code: string, value: string) => {
+    setSelectedDynamicAttributes((current) => {
+      const selected = current[code] ?? [];
+      const normalized = normalizeAttributeValue(value);
+      const nextValues = selected.some((entry) => normalizeAttributeValue(entry) === normalized)
+        ? selected.filter((entry) => normalizeAttributeValue(entry) !== normalized)
+        : [...selected, value];
+      const next = { ...current };
+      if (nextValues.length) next[code] = nextValues;
+      else delete next[code];
+      return next;
+    });
   };
   const clearSearch = () => {
     setSearch("");
     setShowSuggestions(true);
   };
   const tile = (entry: CatalogEntry) => (
-    <ProductTile key={entry.variant.id} entry={entry} />
+    <ProductTile key={entry.variant.id} entry={entry} categoryHref={catalogProductCategoryHref(catalogMenu, entry.product)} />
   );
+  const visualCatalog = Boolean(
+    menuScopeLoaded && menuNode &&
+      !menuNode.modelNavigation &&
+      (menuNode.id === "catalog-root" || menuNode.children.length > 0 || Boolean(brand && menuNode.path.length === 1)) &&
+      !browsingChildren &&
+      !search.trim() &&
+      !menuCleared &&
+      !category && !typeFilter && !modelId && !memory && !color && !sim && !ram &&
+      (!selectedBrand || Boolean(menuItem) || Boolean(brand && !menuItem && menuNode.path.length === 1)) &&
+      !selectedMemory && !selectedColor && !selectedSim && !selectedRam &&
+      Object.keys(selectedDynamicAttributes).length === 0 &&
+      !selectedConnectivity && !selectedAvailability && !minPrice.trim() && !maxPrice.trim(),
+  );
+  const menuPending = Boolean(menuItem && (!menuScopeLoaded || !menuNode || menuNode.id !== menuItem));
+  const siblingNav = menuNode && menuNode.siblings.length > 0 ? <nav className="catalog-sibling-nav" aria-label="Соседние разделы"><div className="catalog-sibling-track">{menuNode.siblings.map((sibling) => sibling.href ? <Link className="catalog-sibling-card" href={sibling.href} key={sibling.id}>{sibling.title}</Link> : <span className="catalog-sibling-card is-disabled" key={sibling.id} aria-disabled="true">{sibling.title}</span>)}</div></nav> : null;
+  const parentNav = menuNode?.parent ? <Link className="catalog-parent-link" href={menuNode.parent.href}>← {menuNode.parent.title}</Link> : null;
+  const modelSelection = menuNode?.modelNavigation;
+  const modelNavigation = modelSelection ? <nav className="catalog-sibling-nav" aria-label="Модели"><div className="catalog-sibling-track"><Link className={`catalog-sibling-card${modelSelection.selectedId === null ? " active" : ""}`} href={modelSelection.typeHref} aria-current={modelSelection.selectedId === null ? "page" : undefined}>Все</Link>{modelSelection.models.map((model) => model.href ? <Link className={`catalog-sibling-card${modelSelection.selectedId === model.id ? " active" : ""}`} href={model.href} key={model.id} aria-current={modelSelection.selectedId === model.id ? "page" : undefined}>{model.title}</Link> : <span className="catalog-sibling-card is-disabled" key={model.id} aria-disabled="true">{model.title}</span>)}</div></nav> : null;
 
   return (
     <div className="catalog-page layout-container">
@@ -910,15 +1101,21 @@ export default function CatalogView({
           <h1>{pageTitle}</h1>
           <p>Выбирайте технику и аксессуары по выгодным ценам</p>
         </div>
-        <button
+        {!visualCatalog && !menuPending && hasCatalogFacets && <button
           className="mobile-filter-btn"
           onClick={() => setMobileFilters((v) => !v)}
         >
           <SlidersHorizontal size={17} />
           Фильтры
-        </button>
+        </button>}
       </div>
-      <div
+      {visualCatalog && !menuPending && menuNode && <section className="visual-catalog" aria-label="Разделы каталога">
+        {(parentNav || siblingNav) && <div className="catalog-navigation-context">{parentNav}{siblingNav}</div>}
+        {menuNode.children.length > 0 ? <div className="visual-catalog-grid">{menuNode.children.map((child) => child.href ? <Link className="visual-catalog-card" href={child.href} key={child.id}><span className="visual-catalog-card-media">{child.banner?.imageUrl ? <img src={child.banner.imageUrl} alt={child.banner.alt ?? ""} /> : <PackageOpen size={34} />}</span><span className="visual-catalog-card-overlay" /><strong className="visual-catalog-card-title">{child.title}</strong>{child.description && <small>{child.description}</small>}</Link> : <div className="visual-catalog-card" key={child.id} aria-disabled="true"><span className="visual-catalog-card-media">{child.banner?.imageUrl ? <img src={child.banner.imageUrl} alt={child.banner.alt ?? ""} /> : <PackageOpen size={34} />}</span><span className="visual-catalog-card-overlay" /><strong className="visual-catalog-card-title">{child.title}</strong>{child.description && <small>{child.description}</small>}</div>)}</div> : <div className="empty-state"><PackageOpen size={32} /><h2>Разделы пока не настроены</h2><p>В этом разделе нет доступных подразделов.</p></div>}
+      </section>}
+      {menuPending && <section className="catalog-loading-shell" aria-label="Загрузка каталога" aria-busy="true"><div className="catalog-loading-sidebar"><span /><span /><span /><span /></div><div className="catalog-loading-content"><span className="catalog-loading-toolbar" /><div className="catalog-loading-grid">{[1, 2, 3, 4].map((item) => <span key={item} />)}</div></div></section>}
+      {!visualCatalog && !menuPending && <>
+      {isSearchPage && <div
         className="catalog-search-row"
         ref={searchRef}
         onBlur={(event) => {
@@ -969,6 +1166,7 @@ export default function CatalogView({
               ) : suggestions.length ? (
                 suggestions.map(({ product, variant }) => {
                   const price = variantPrice(variant);
+                  const oldPrice = price !== null && variant.oldPrice !== null ? Number(variant.oldPrice) : null;
                   const suggestionImage = productVariantImage(product, variant);
                   const structuredDescription = [
                     variant.color?.name,
@@ -1001,10 +1199,10 @@ export default function CatalogView({
                         <b>{product.name}</b>
                         <small>{variantDescription}</small>
                       </span>
-                      <em>
+                      <em className="catalog-suggestion-price">
                         {price === null
                           ? "Уточнить цену"
-                          : `${price.toLocaleString("ru-RU")} ₽`}
+                          : <>{price.toLocaleString("ru-RU")} ₽{oldPrice !== null && Number.isFinite(oldPrice) && <s>{oldPrice.toLocaleString("ru-RU")} ₽</s>}</>}
                       </em>
                       <span className="suggestion-arrow">›</span>
                     </Link>
@@ -1019,8 +1217,9 @@ export default function CatalogView({
             </div>
           </div>
         )}
-      </div>
-      <div className="catalog-layout">
+      </div>}
+      {(parentNav || modelNavigation || siblingNav) && <div className="catalog-navigation-context">{parentNav}{modelNavigation ?? siblingNav}</div>}
+      <div className={`catalog-layout${hasCatalogFacets ? "" : " filterless"}`}>
         {mobileFilters && (
           <button
             type="button"
@@ -1029,7 +1228,29 @@ export default function CatalogView({
             onClick={() => setMobileFilters(false)}
           />
         )}
-        <aside className={`filters ${mobileFilters ? "filters-open" : ""}`}>
+        <div className="catalog-sidebar-column">
+          <div className="catalog-toolbar">
+            <CatalogSort value={sort} onChange={setSort} />
+            <div className="view-toggle">
+              <button
+                className={view === "grid" ? "active" : ""}
+                onClick={() => setView("grid")}
+                aria-label="Сетка"
+                aria-pressed={view === "grid"}
+              >
+                <Grid2X2 size={18} />
+              </button>
+              <button
+                className={view === "list" ? "active" : ""}
+                onClick={() => setView("list")}
+                aria-label="Список"
+                aria-pressed={view === "list"}
+              >
+                <List size={18} />
+              </button>
+            </div>
+          </div>
+        {hasCatalogFacets && <aside className={`filters ${mobileFilters ? "filters-open" : ""}`}>
           <div className="filters-title">
             <strong>Фильтры</strong>
             <button
@@ -1039,7 +1260,7 @@ export default function CatalogView({
               <X size={18} />
             </button>
           </div>
-          <FilterGroup title="Категория">
+          {!effectiveMenuItem && categories.length > 1 && <FilterGroup title="Категория">
             <div className="filter-list">
               <label className={!selectedCategory ? "selected" : ""}>
                 <input
@@ -1074,8 +1295,8 @@ export default function CatalogView({
                 </label>
               ))}
             </div>
-          </FilterGroup>
-          <FilterGroup title="Бренд">
+          </FilterGroup>}
+          {!effectiveMenuItem && brands.length > 1 && <FilterGroup title="Бренд">
             <div className="check-list">
               <label>
                 <input
@@ -1098,8 +1319,8 @@ export default function CatalogView({
                 </label>
               ))}
             </div>
-          </FilterGroup>
-          <FilterGroup title="Тип товара">
+          </FilterGroup>}
+          {!effectiveMenuItem && types.length > 1 && <FilterGroup title="Тип товара">
             <div className="check-list">
               <label>
                 <input
@@ -1122,7 +1343,7 @@ export default function CatalogView({
                 </label>
               ))}
             </div>
-          </FilterGroup>
+          </FilterGroup>}
           {[
             [
               "Объём памяти",
@@ -1132,7 +1353,7 @@ export default function CatalogView({
               memories,
             ],
             ["SIM", "sim", selectedSim, setSelectedSim, sims],
-          ].map(([titleText, dictionary, selected, setter, values]) => (
+          ].filter((entry) => (entry[4] as string[]).length > 1).map(([titleText, dictionary, selected, setter, values]) => (
             <FilterGroup key={titleText as string} title={titleText as string}>
               <div className="check-list">
                 <label>
@@ -1165,7 +1386,7 @@ export default function CatalogView({
               </div>
             </FilterGroup>
           ))}
-          <FilterGroup title="Цвет">
+          {hasColorFacet && <FilterGroup title="Цвет">
             <div className="check-list color-filter-list">
               <label>
                 <input
@@ -1203,8 +1424,8 @@ export default function CatalogView({
                 );
               })}
             </div>
-          </FilterGroup>
-          <FilterGroup title="RAM">
+          </FilterGroup>}
+          {hasRamFacet && <FilterGroup title="RAM">
             <div className="check-list">
               <label>
                 <input
@@ -1227,8 +1448,8 @@ export default function CatalogView({
                 </label>
               ))}
             </div>
-          </FilterGroup>
-          <FilterGroup title="Подключение">
+          </FilterGroup>}
+          {hasConnectivityFacet && <FilterGroup title="Подключение">
             <div className="check-list">
               <label>
                 <input
@@ -1251,8 +1472,26 @@ export default function CatalogView({
                 </label>
               ))}
             </div>
-          </FilterGroup>
-          <FilterGroup title="Наличие">
+          </FilterGroup>}
+          {dynamicAttributeFacets.map((facet) => {
+            const selectedValues = selectedDynamicAttributes[facet.code] ?? [];
+            return <FilterGroup key={facet.code} title={facet.label}>
+              <div className="check-list">
+                {facet.values.map((value) => (
+                  <label key={value}>
+                    <input
+                      type="checkbox"
+                      name={`attribute-${facet.code}`}
+                      checked={selectedValues.some((entry) => normalizeAttributeValue(entry) === normalizeAttributeValue(value))}
+                      onChange={() => toggleDynamicAttribute(facet.code, value)}
+                    />
+                    {value}
+                  </label>
+                ))}
+              </div>
+            </FilterGroup>;
+          })}
+          {hasAvailabilityFacet && <FilterGroup title="Наличие">
             <div className="check-list">
               <label>
                 <input
@@ -1291,8 +1530,8 @@ export default function CatalogView({
                 Нет в наличии
               </label>
             </div>
-          </FilterGroup>
-          <FilterGroup title="Цена, ₽">
+          </FilterGroup>}
+          {hasPriceFacet && <FilterGroup title="Цена, ₽">
             <div className="catalog-price-filter">
               <label>
                 От
@@ -1328,33 +1567,13 @@ export default function CatalogView({
                 <small role="alert">Минимальная цена выше максимальной</small>
               )}
             </div>
-          </FilterGroup>
+          </FilterGroup>}
           <button className="filter-reset" onClick={reset}>
             Сбросить фильтры
           </button>
-        </aside>
+        </aside>}
+        </div>
         <section className="catalog-results">
-          <div className="catalog-toolbar">
-            <CatalogSort value={sort} onChange={setSort} />
-            <div className="view-toggle">
-              <button
-                className={view === "grid" ? "active" : ""}
-                onClick={() => setView("grid")}
-                aria-label="Сетка"
-                aria-pressed={view === "grid"}
-              >
-                <Grid2X2 size={18} />
-              </button>
-              <button
-                className={view === "list" ? "active" : ""}
-                onClick={() => setView("list")}
-                aria-label="Список"
-                aria-pressed={view === "list"}
-              >
-                <List size={18} />
-              </button>
-            </div>
-          </div>
           {error ? (
             <div className="empty-state">
               <h2>Не удалось загрузить каталог</h2>
@@ -1381,6 +1600,7 @@ export default function CatalogView({
           )}
         </section>
       </div>
+      </>}
     </div>
   );
 }

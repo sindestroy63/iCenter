@@ -30,7 +30,7 @@ export async function PATCH(request: Request, context: { params: { orderNumber: 
 export async function DELETE(request: Request, context: { params: { orderNumber: string } }) {
   try {
     const session = await requireAdminMutation(request);
-    if (session.role !== "OWNER") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    if (session.role !== "OWNER" && session.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     await deleteRequest({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, context.params.orderNumber);
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {

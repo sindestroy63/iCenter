@@ -24,9 +24,9 @@ export async function publicCollectionGet(request: Request, collection: ProductC
         const data = await tx.$queryRaw<Array<{ productId: string; slug: string; variantId: null }>>`
           SELECT p.id AS "productId",p.slug,NULL::text AS "variantId"
           FROM best_offers entry
-          JOIN products p ON p.id=entry."productId"
+          JOIN products p ON p.id=entry."productId" AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb)
           JOIN brands b ON b.id=p."brandId" AND b."isActive"=TRUE
-          JOIN product_types pt ON pt.id=p."productTypeId" AND pt."isActive"=TRUE
+          JOIN global_product_types pt ON pt.id=p."globalProductTypeId" AND pt."isActive"=TRUE
           JOIN categories c ON c.id=p."categoryId" AND c."isActive"=TRUE
           WHERE entry."isActive"=TRUE AND p.status='PUBLISHED'::"ProductStatus"
             AND EXISTS(SELECT 1 FROM product_variants v JOIN inventory i ON i."variantId"=v.id
@@ -38,9 +38,9 @@ export async function publicCollectionGet(request: Request, collection: ProductC
       const data = await tx.$queryRaw<Array<{ productId: string; slug: string; variantId: string | null }>>(Prisma.sql`
         SELECT p.id AS "productId",p.slug,entry."variantId"
         FROM ${table} entry
-        JOIN products p ON p.id=entry."productId"
+        JOIN products p ON p.id=entry."productId" AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb)
         JOIN brands b ON b.id=p."brandId" AND b."isActive"=TRUE
-        JOIN product_types pt ON pt.id=p."productTypeId" AND pt."isActive"=TRUE
+        JOIN global_product_types pt ON pt.id=p."globalProductTypeId" AND pt."isActive"=TRUE
         JOIN categories c ON c.id=p."categoryId" AND c."isActive"=TRUE
         WHERE entry."isActive"=TRUE AND p.status='PUBLISHED'::"ProductStatus"
           AND (

@@ -1,9 +1,9 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { Check, ImagePlus, X } from "lucide-react";
 import ConsentFields, { type ConsentState } from "@/components/ConsentFields";
 import { useStoreState } from "@/components/StoreState";
-import { formatRussianPhone, isValidRussianPhone } from "@/lib/phone";
+import { formatRussianPhoneInput, isValidRussianPhone, removeAdjacentRussianPhoneDigit } from "@/lib/phone";
 
 type Mode = "trade_in" | "installment";
 type Props = {
@@ -43,6 +43,8 @@ export default function LeadRequestForm({
   const { city } = useStoreState();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+  const phoneCursorRef = useRef<number | null>(null);
   const [brand, setBrand] = useState("");
   const [deviceType, setDeviceType] = useState("");
   const [model, setModel] = useState("");
@@ -63,6 +65,11 @@ export default function LeadRequestForm({
       globalThis.crypto?.randomUUID?.() ??
       `${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
+  useLayoutEffect(() => {
+    if (phoneCursorRef.current === null || !phoneInputRef.current) return;
+    phoneInputRef.current.setSelectionRange(phoneCursorRef.current, phoneCursorRef.current);
+    phoneCursorRef.current = null;
+  }, [phone]);
   function addFiles(list: FileList | null) {
     if (!list) return;
     const next = [...files, ...Array.from(list)];
@@ -192,7 +199,21 @@ export default function LeadRequestForm({
             autoComplete="tel"
             placeholder="+7 (___) ___-__-__"
             value={phone}
-            onChange={(e) => setPhone(formatRussianPhone(e.target.value))}
+            ref={phoneInputRef}
+            onChange={(e) => {
+              const next = formatRussianPhoneInput(e.target.value, e.target.selectionStart);
+              phoneCursorRef.current = next.cursor;
+              setPhone(next.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.currentTarget.selectionStart !== e.currentTarget.selectionEnd) return;
+              if (e.key !== "Backspace" && e.key !== "Delete") return;
+              const next = removeAdjacentRussianPhoneDigit(phone, e.currentTarget.selectionStart ?? 0, e.key === "Backspace" ? "backward" : "forward");
+              if (!next) return;
+              e.preventDefault();
+              phoneCursorRef.current = next.cursor;
+              setPhone(next.value);
+            }}
           />
         </label>
         {mode === "trade_in" && (

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { Image, Power, RefreshCw, Upload, X } from "lucide-react";
+import { Image, RefreshCw, Upload, X } from "lucide-react";
 
 type Placement = "home" | "home_brand_apple" | "home_brand_samsung" | "home_brand_dyson" | "home_brand_playstation" | "product_trade_in";
 type Banner = {
@@ -18,9 +18,11 @@ type Banner = {
   sortOrder: number;
   isActive: boolean;
 };
+type ActionType = "none" | "url" | "group" | "product" | "category";
+type ActionOption = { id: string; name?: string; title?: string; slug?: string; parentId?: string | null };
 type Media = { id: string; filename: string; storagePath: string; mimeType: string; url: string };
 type MediaKind = "image" | "video";
-type Draft = Omit<Banner, "id" | "imageName" | "imageUrl" | "imageMimeType"> & { id: string | null; mediaKind: MediaKind };
+type Draft = Omit<Banner, "id" | "imageName" | "imageUrl" | "imageMimeType" | "linkUrl"> & { id: string | null; mediaKind: MediaKind; linkUrl: string | null; actionType: ActionType; actionValue: string };
 type SlotConfig = { placement: Placement; label: string; size: string; aspect: "hero" | "brand" | "trade-in" };
 
 const slots: SlotConfig[] = [
@@ -52,7 +54,15 @@ function blank(sortOrder: number, placement: Placement): Draft {
     mediaKind: "image",
     sortOrder,
     isActive: true,
+    actionType: placement === "home" ? "url" : "none",
+    actionValue: placement === "home" ? "/catalog" : "",
   };
+}
+
+function decodeAction(linkUrl: string | null): { actionType: ActionType; actionValue: string } {
+  if (!linkUrl) return { actionType: "none", actionValue: "" };
+  const match = linkUrl.match(/^(group|product|category):(.+)$/);
+  return match ? { actionType: match[1] as ActionType, actionValue: match[2] } : { actionType: "url", actionValue: linkUrl };
 }
 
 function mediaError(code: string | undefined) {
@@ -70,18 +80,28 @@ export default function AdminBannersBackend() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [groups, setGroups] = useState<ActionOption[]>([]);
+  const [products, setProducts] = useState<ActionOption[]>([]);
+  const [categories, setCategories] = useState<ActionOption[]>([]);
+  const [productQuery, setProductQuery] = useState("");
 
   const load = useCallback(async () => {
     setError("");
     try {
-      const [bannerResponse, mediaResponse] = await Promise.all([
+      const [bannerResponse, mediaResponse, groupResponse, productResponse, categoryResponse] = await Promise.all([
         fetch("/api/admin/banners", { cache: "no-store" }),
         fetch("/api/admin/media", { cache: "no-store" }),
+        fetch("/api/admin/product-groups", { cache: "no-store" }),
+        fetch("/api/admin/products?limit=200", { cache: "no-store" }),
+        fetch("/api/admin/taxonomy?type=categories", { cache: "no-store" }),
       ]);
-      const [bannerBody, mediaBody] = await Promise.all([bannerResponse.json(), mediaResponse.json()]);
+      const [bannerBody, mediaBody, groupBody, productBody, categoryBody] = await Promise.all([bannerResponse.json(), mediaResponse.json(), groupResponse.json(), productResponse.json(), categoryResponse.json()]);
       if (!bannerResponse.ok || !mediaResponse.ok) throw new Error("Не удалось загрузить баннеры или медиатеку.");
       setItems(Array.isArray(bannerBody.data) ? bannerBody.data : []);
       setMedia(Array.isArray(mediaBody.data) ? mediaBody.data.filter((entry: Media) => entry.mimeType.startsWith("image/") || entry.mimeType.startsWith("video/")) : []);
+      setGroups(Array.isArray(groupBody.data) ? groupBody.data : []);
+      setProducts(Array.isArray(productBody.data) ? productBody.data : []);
+      setCategories(Array.isArray(categoryBody.data) ? categoryBody.data : []);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Ошибка загрузки.");
     }
@@ -100,6 +120,7 @@ export default function AdminBannersBackend() {
     mediaKind: banner.imageMimeType?.startsWith("video/") ? "video" : "image",
     sortOrder: banner.sortOrder,
     isActive: banner.isActive,
+    ...decodeAction(banner.linkUrl),
   });
 
   const getSlotBanner = (placement: Placement) => {
@@ -107,24 +128,27 @@ export default function AdminBannersBackend() {
     return matching.find((item) => item.isActive) ?? matching[0];
   };
 
-  const openSlot = (placement: Placement) => {
+  const openSlot = (placement: Placement, createNew = false, target?: Banner) => {
     const existing = getSlotBanner(placement);
-    setDraft(existing ? edit(existing) : blank(items.length * 10, placement));
+    if (createNew) {
+      const nextOrder = Math.max(-1, ...items.filter((item) => item.placement === placement).map((item) => item.sortOrder)) + 1;
+      setDraft(blank(nextOrder, placement));
+    } else setDraft(target ? edit(target) : existing ? edit(existing) : blank(items.length * 10, placement));
   };
 
   const save = async (value: Draft) => {
     setBusy(true);
     setError("");
     try {
-      const { id, mediaKind: _mediaKind, ...draftValue } = value;
+      const { id, mediaKind: _mediaKind, actionType, actionValue, linkUrl: _linkUrl, ...draftValue } = value;
       const brandTitle = brandTitles[value.placement];
       const payload = {
         ...draftValue,
         ...(id !== null ? { id } : {}),
         title: brandTitle ?? (value.placement === "product_trade_in" ? tradeInTitle : value.title),
         subtitle: value.placement === "product_trade_in" || brandTitle ? null : value.subtitle || null,
-        linkUrl: value.placement === "product_trade_in" || brandTitle ? null : value.linkUrl || null,
-        linkText: value.placement === "product_trade_in" ? "Открыть форму Trade-in" : brandTitle ? null : value.linkText || null,
+        linkUrl: value.placement === "product_trade_in" || brandTitle || actionType === "none" ? null : actionType === "url" ? actionValue || null : actionValue ? `${actionType}:${actionValue}` : null,
+        linkText: value.placement === "product_trade_in" ? "Открыть форму Trade-in" : brandTitle || actionType === "none" ? null : value.linkText || null,
       };
       const response = await fetch("/api/admin/banners", {
         method: id !== null ? "PATCH" : "POST",
@@ -199,6 +223,7 @@ export default function AdminBannersBackend() {
     <div className="admin-home-banner-slots">
       {slots.map((slot) => {
         const banner = getSlotBanner(slot.placement);
+        const homeBanners = slot.placement === "home" ? items.filter((item) => item.placement === "home").sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id)) : [];
         return <section className="admin-home-banner-slot" key={slot.placement}>
           <div className={`admin-home-banner-slot-preview is-${slot.aspect}`}>
             {banner?.imageUrl && banner.imageMimeType?.startsWith("video/") ? <video src={banner.imageUrl} muted playsInline preload="metadata" aria-label={`Видео: ${slot.label}`} /> : banner?.imageUrl ? <img src={banner.imageUrl} alt={`Превью: ${slot.label}`} /> : <Image size={22} aria-hidden="true" />}
@@ -208,9 +233,9 @@ export default function AdminBannersBackend() {
             <span className={`admin-banner-state ${banner?.isActive ? "is-active" : "is-disabled"}`}><i />{banner ? banner.isActive ? "Активен" : "Отключён" : "Не настроен"}</span>
           </div>
           <div className="admin-home-banner-slot-actions">
-            <button className="admin-secondary" type="button" onClick={() => openSlot(slot.placement)}>{banner ? "Настроить" : "Добавить медиа"}</button>
-            {banner && <button className={`icon-action ${banner.isActive ? "admin-banner-power-active" : ""}`} type="button" aria-label={banner.isActive ? `Отключить: ${slot.label}` : `Включить: ${slot.label}`} title={banner.isActive ? "Отключить" : "Включить"} disabled={busy} onClick={() => void save({ ...edit(banner), isActive: !banner.isActive })}><Power size={16} /></button>}
+            <button className="admin-secondary" type="button" onClick={() => openSlot(slot.placement, slot.placement === "home")}>{slot.placement === "home" ? "Добавить слайд" : banner ? "Настроить" : "Добавить медиа"}</button>
           </div>
+          {slot.placement === "home" && homeBanners.length > 0 && <div className="admin-banner-slide-list">{homeBanners.map((item, index) => <article className="admin-banner-slide-item" key={item.id}><div className="admin-banner-slide-thumb">{item.imageUrl && item.imageMimeType?.startsWith("video/") ? <video src={item.imageUrl} muted playsInline preload="metadata" /> : item.imageUrl ? <img src={item.imageUrl} alt="" /> : <Image size={18} />}</div><div className="admin-banner-slide-meta"><strong>{index + 1}. {item.title || "Без заголовка"}</strong><span>{item.imageMimeType?.startsWith("video/") ? "Видео" : "Изображение"} · {item.linkUrl ? "С переходом" : "Без перехода"}</span></div><span className={`admin-banner-state ${item.isActive ? "is-active" : "is-disabled"}`}><i />{item.isActive ? "Активен" : "Отключён"}</span><button type="button" className="admin-secondary" onClick={() => openSlot("home", false, item)}>Редактировать</button></article>)}</div>}
         </section>;
       })}
     </div>
@@ -219,12 +244,13 @@ export default function AdminBannersBackend() {
         <header><div><h2>{draft.id ? "Настройка баннера" : "Новый баннер"}</h2><p>{selectedSlot?.label} · рекомендуемый размер {selectedSlot?.size}</p></div><button type="button" onClick={() => setDraft(null)} aria-label="Закрыть"><X size={18} /></button></header>
         <div className="admin-modal-body">
           {draft.placement === "home" ? <>
+            <fieldset className="admin-banner-fieldset"><legend>Содержимое</legend>
             <label className="admin-form-label">Заголовок<input value={draft.title} maxLength={160} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
             <label className="admin-form-label">Описание<input value={draft.subtitle ?? ""} maxLength={500} onChange={(event) => setDraft({ ...draft, subtitle: event.target.value })} /></label>
-            <label className="admin-form-label">Текст ссылки<input value={draft.linkText ?? ""} maxLength={80} onChange={(event) => setDraft({ ...draft, linkText: event.target.value })} /></label>
-            <label className="admin-form-label">Ссылка<input value={draft.linkUrl ?? ""} maxLength={500} onChange={(event) => setDraft({ ...draft, linkUrl: event.target.value })} /></label>
+            </fieldset>
           </> : <p className="admin-banner-slot-note">Текст, оформление и ссылка задаются на сайте. Здесь настраивается только фоновое изображение.</p>}
-          {draft.placement === "home" && <label className="admin-form-label">Порядок отображения<input type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label>}
+          {draft.placement === "home" && <fieldset className="admin-banner-fieldset"><legend>Действие</legend><label className="admin-form-label">Тип перехода<select value={draft.actionType} onChange={(event) => setDraft({ ...draft, actionType: event.target.value as ActionType, actionValue: "" })}><option value="none">Без перехода</option><option value="url">Ссылка</option><option value="group">Группа товаров</option><option value="product">Товар</option><option value="category">Категория</option></select></label>{draft.actionType === "url" && <label className="admin-form-label">Ссылка<input value={draft.actionValue} maxLength={500} onChange={(event) => setDraft({ ...draft, actionValue: event.target.value })} /></label>}{draft.actionType === "group" && <label className="admin-form-label">Группа<select value={draft.actionValue} onChange={(event) => setDraft({ ...draft, actionValue: event.target.value })}><option value="">Выберите группу</option>{groups.map((item) => <option key={item.id} value={item.id}>{item.title ?? item.name}</option>)}</select></label>}{draft.actionType === "product" && <><label className="admin-form-label">Поиск товара<input value={productQuery} placeholder="Название или slug" onChange={(event) => setProductQuery(event.target.value)} /></label><label className="admin-form-label">Товар<select value={draft.actionValue} onChange={(event) => setDraft({ ...draft, actionValue: event.target.value })}><option value="">Выберите товар</option>{products.filter((item) => `${item.name ?? ""} ${item.slug ?? ""}`.toLocaleLowerCase().includes(productQuery.toLocaleLowerCase())).map((item) => <option key={item.id} value={item.id}>{item.name} {item.slug ? `(${item.slug})` : ""}</option>)}</select></label></>}{draft.actionType === "category" && <label className="admin-form-label">Категория<select value={draft.actionValue} onChange={(event) => setDraft({ ...draft, actionValue: event.target.value })}><option value="">Выберите категорию</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.parentId ? "↳ " : ""}{item.name}</option>)}</select></label>}{draft.actionType !== "none" && <label className="admin-form-label">Текст кнопки<input value={draft.linkText ?? ""} maxLength={80} onChange={(event) => setDraft({ ...draft, linkText: event.target.value })} /></label>}</fieldset>}
+          {draft.placement === "home" && <fieldset className="admin-banner-fieldset"><legend>Публикация</legend><label className="admin-form-label">Порядок отображения<input type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })} /></label></fieldset>}
           <label className="admin-form-label">Тип медиа<select value={draft.mediaKind} onChange={(event) => setDraft({ ...draft, mediaKind: event.target.value as MediaKind, imageMediaId: null })}><option value="image">Изображение</option><option value="video">Видео</option></select><small>MP4/WebM загружаются отложенно и воспроизводятся только когда баннер виден.</small></label>
           <label className="admin-form-label">{draft.mediaKind === "video" ? "Видео" : "Изображение"}<select value={draft.imageMediaId ?? ""} onChange={(event) => setDraft({ ...draft, imageMediaId: event.target.value || null })}><option value="">Без медиафайла</option>{selectedMedia && !selectableMedia.includes(selectedMedia) && <option value={selectedMedia.id} disabled>Текущий формат не поддерживается, замените файл</option>}{selectableMedia.map((entry) => <option key={entry.id} value={entry.id}>{entry.filename}</option>)}</select><small>{draft.mediaKind === "video" ? "MP4 или WebM. До 80 МБ по умолчанию." : "WebP, JPEG или PNG. Максимум 10 МБ."}</small></label>
           <div className="admin-banner-upload-row"><label className="admin-secondary admin-banner-upload"><Upload size={15} />{uploading ? "Загрузка…" : "Загрузить с компьютера"}<input type="file" accept={draft.mediaKind === "video" ? ".mp4,.webm,video/mp4,video/webm" : ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"} disabled={uploading} onChange={(event) => void uploadForBanner(event)} /></label>{draft.imageMediaId && <button type="button" className="admin-secondary" onClick={() => setDraft({ ...draft, imageMediaId: null })} disabled={busy || uploading}>Удалить привязку</button>}</div>

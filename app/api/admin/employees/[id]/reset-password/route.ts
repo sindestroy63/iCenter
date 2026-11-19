@@ -8,17 +8,16 @@ import { writeAuditLog } from "@/lib/admin-audit";
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   try {
     const actor = await requireGlobalAdminMutation(request);
-    const parsed = z.object({ temporaryPassword: z.string().regex(/^[A-Za-z0-9_-]{32}$/) }).safeParse(await request.json());
+    const parsed = z.object({ temporaryPassword: z.string().min(14).max(256) }).safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_PASSWORD" }, { status: 400 });
     const hash = await argon2.hash(parsed.data.temporaryPassword, { type: argon2.argon2id });
     const db = adminDb();
     await db.$transaction(async tx => {
       const users = await tx.$queryRaw<Array<{ role: string }>>`SELECT role::text AS role FROM users WHERE id=${params.id} AND "isActive"=TRUE FOR UPDATE`;
       if (!users[0]) throw new Error("NOT_FOUND");
-      if (actor.role !== "OWNER" && users[0].role === "OWNER") throw new Error("FORBIDDEN");
-      await tx.$executeRaw`UPDATE users SET "passwordHash"=${hash},"mustChangePassword"=TRUE,"updatedAt"=NOW() WHERE id=${params.id}`;
+      await tx.$executeRaw`UPDATE users SET "passwordHash"=${hash},"mustChangePassword"=FALSE,"updatedAt"=NOW() WHERE id=${params.id}`;
       await tx.$executeRaw`UPDATE sessions SET "revokedAt"=NOW() WHERE "userId"=${params.id} AND "revokedAt" IS NULL`;
-      await writeAuditLog(tx, actor, { action: "user.password_reset", entityType: "user", entityId: params.id, changes: { old: null, new: { mustChangePassword: true } } });
+      await writeAuditLog(tx, actor, { action: "user.password_reset", entityType: "user", entityId: params.id, changes: { old: null, new: { mustChangePassword: false } } });
     });
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {

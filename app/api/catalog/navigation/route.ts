@@ -22,13 +22,13 @@ export async function GET(request: Request) {
       const rows = await tx.$queryRaw<NavigationRow[]>`
         SELECT DISTINCT
           b.slug AS "brandSlug", b.name AS "brandName",
-          pt.slug AS "typeSlug", pt.name AS "typeName",
+          pt."canonicalKey" AS "typeSlug", pt.name AS "typeName",
           c.slug AS "categorySlug", c.name AS "categoryName"
         FROM products p
         JOIN brands b ON b.id=p."brandId" AND b."isActive"=TRUE
-        JOIN product_types pt ON pt.id=p."productTypeId" AND pt."isActive"=TRUE
+        JOIN global_product_types pt ON pt.id=p."globalProductTypeId" AND pt."isActive"=TRUE
         JOIN categories c ON c.id=p."categoryId" AND c."isActive"=TRUE
-        WHERE p.status='PUBLISHED'::"ProductStatus"
+        WHERE p.status='PUBLISHED'::"ProductStatus" AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb)
           AND EXISTS (
             SELECT 1
             FROM product_variants v

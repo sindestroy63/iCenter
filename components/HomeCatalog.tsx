@@ -2,22 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, PackageOpen } from "lucide-react";
+import { ArrowLeft, ArrowRight, PackageOpen } from "lucide-react";
 import { useStoreState } from "./StoreState";
 import { type CatalogProductDto } from "./catalogClient";
 import CatalogProductCard from "./CatalogProductCard";
 import BannerVideo from "./BannerVideo";
+import { catalogProductCategoryHref, type CatalogMenuAction } from "@/lib/catalog-menu";
 
 type ApiList<T> = { data: T[] };
 type HomeBannerPlacement = "home" | "home_brand_apple" | "home_brand_samsung" | "home_brand_dyson" | "home_brand_playstation";
-type HomeBanner = { id: string; placement: HomeBannerPlacement; title: string; subtitle: string | null; linkUrl: string | null; linkText: string | null; mediaUrl: string | null; mediaType: string | null };
-type HomeBrand = { name: string; desc: string; filter: string; tone: string; placement: Exclude<HomeBannerPlacement, "home"> };
+type HomeBanner = { id: string; placement: HomeBannerPlacement; title: string; subtitle: string | null; linkUrl: string | null; linkText: string | null; mediaUrl: string | null; optimizedMediaUrl?: string | null; optimizedPosterUrl?: string | null; mediaType: string | null };
+type HomeBrand = { id: string; name: string; desc: string; href: string | null; tone: string; imageUrl: string | null; imageType: string | null; posterUrl: string | null; imageAlt: string };
+type CatalogMenuItem = { id: string; title: string; description?: string; href: string | null; action?: CatalogMenuAction | null; productIds?: string[]; children: CatalogMenuItem[]; banner?: { imageUrl: string | null; alt?: string } | null; promoBanner?: { imageUrl: string | null; alt?: string } | null };
 type LoadState = "loading" | "ready" | "error";
 type CollectionRef = { productId: string; slug: string; variantId: string | null };
 type CollectionResponse = ApiList<CollectionRef> & { configured: boolean };
 
 const fallbackTitle = "Технологии, которые вдохновляют.";
-export default function HomeCatalog({ brands }: { brands: HomeBrand[] }) {
+export default function HomeCatalog() {
   const { city } = useStoreState();
   const [products, setProducts] = useState<CatalogProductDto[]>([]);
   const [collectionProducts, setCollectionProducts] = useState<CatalogProductDto[]>([]);
@@ -25,6 +27,8 @@ export default function HomeCatalog({ brands }: { brands: HomeBrand[] }) {
   const [popularRefs, setPopularRefs] = useState<CollectionRef[]>([]);
   const [popularConfigured, setPopularConfigured] = useState(false);
   const [banners, setBanners] = useState<HomeBanner[]>([]);
+  const [catalogBrands, setCatalogBrands] = useState<HomeBrand[]>([]);
+  const [catalogMenu, setCatalogMenu] = useState<CatalogMenuItem[]>([]);
   const [failedBannerMedia, setFailedBannerMedia] = useState<string[]>([]);
   const [bannerState, setBannerState] = useState<LoadState>("loading");
   const [catalogState, setCatalogState] = useState<LoadState>("loading");
@@ -138,6 +142,47 @@ export default function HomeCatalog({ brands }: { brands: HomeBrand[] }) {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/catalog/menu?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("menu");
+        return response.json() as Promise<{ data?: CatalogMenuItem[] }>;
+      })
+      .then((body) => {
+        if (controller.signal.aborted) return;
+        const menuItems = body.data ?? [];
+        setCatalogMenu(menuItems);
+        const toneFor = (item: CatalogMenuItem) => {
+          const value = `${item.id} ${item.title}`.toLocaleLowerCase("ru-RU");
+          return /apple/.test(value) ? "apple" : /samsung/.test(value) ? "samsung" : /dyson/.test(value) ? "dyson" : /playstation|консол/.test(value) ? "playstation" : "generic";
+        };
+        const placementByRoot: Record<string, HomeBannerPlacement> = {
+          apple: "home_brand_apple",
+          samsung: "home_brand_samsung",
+          dyson: "home_brand_dyson",
+          consoles: "home_brand_playstation",
+          playstation: "home_brand_playstation",
+        };
+        const bannerByPlacement = new Map(banners.map((banner) => [banner.placement, banner]));
+        setCatalogBrands(menuItems.filter((item) => placementByRoot[item.id]).map((item) => {
+          const visualBanner = bannerByPlacement.get(placementByRoot[item.id]);
+          return {
+          id: item.id,
+          name: item.title,
+          desc: item.description || "",
+          href: item.href,
+          tone: toneFor(item),
+          imageUrl: visualBanner?.optimizedMediaUrl ?? visualBanner?.mediaUrl ?? null,
+          imageType: visualBanner?.mediaType ?? null,
+          posterUrl: visualBanner?.optimizedPosterUrl ?? null,
+          imageAlt: visualBanner?.title ?? item.title,
+        }; }));
+      })
+      .catch(() => { if (!controller.signal.aborted) { setCatalogBrands([]); setCatalogMenu([]); } });
+    return () => controller.abort();
+  }, [banners, city]);
+
   const bySlug = new Map([...products, ...collectionProducts].map((product) => [product.slug, product]));
   const resolveRefs = (refs: CollectionRef[]) => refs.map((entry) => ({ entry, product: bySlug.get(entry.slug) })).filter((item): item is { entry: CollectionRef; product: CatalogProductDto } => !!item.product);
   const offers = resolveRefs(offerRefs);
@@ -146,34 +191,53 @@ export default function HomeCatalog({ brands }: { brands: HomeBrand[] }) {
   const popular = popularConfigured ? configuredPopular : products.slice(0, 4).map((product) => ({ product, entry: { productId: product.id, slug: product.slug, variantId: null } }));
   const loading = catalogState === "loading";
   const error = catalogState === "error";
-  const activeBanner = banners.find((banner) => banner.placement === "home");
-  const cmsMedia = activeBanner?.mediaUrl || null;
-  const heroMedia = cmsMedia && !failedBannerMedia.includes(cmsMedia) ? cmsMedia : null;
+  const heroBanners = banners.filter((banner) => banner.placement === "home" && banner.mediaUrl && !failedBannerMedia.includes(banner.mediaUrl));
+  const [heroIndex, setHeroIndex] = useState(0);
+  const [heroPaused, setHeroPaused] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    setHeroIndex((current) => heroBanners.length ? current % heroBanners.length : 0);
+  }, [heroBanners.length]);
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReducedMotion(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+  useEffect(() => {
+    if (heroPaused || reducedMotion || heroBanners.length < 2) return;
+    const timer = window.setTimeout(() => setHeroIndex((current) => (current + 1) % heroBanners.length), 5000);
+    return () => window.clearTimeout(timer);
+  }, [heroIndex, heroPaused, reducedMotion, heroBanners.length]);
+  const activeBanner = heroBanners[heroIndex] ?? null;
+  const heroMedia = activeBanner?.mediaUrl ?? null;
   const heroIsVideo = activeBanner?.mediaType?.startsWith("video/") ?? false;
-  const bannerByPlacement = new Map(banners.map((banner) => [banner.placement, banner]));
   const markBannerMediaFailed = (src: string) => setFailedBannerMedia((current) => current.includes(src) ? current : [...current, src]);
 
-  const renderOfferCards = (items: Array<{ product: CatalogProductDto; entry: CollectionRef }>) => <div className="home-offer-grid">{items.map(({ product, entry }) => <CatalogProductCard key={`${entry.productId}:${entry.variantId ?? "product"}`} product={product} variantId={entry.variantId ?? undefined} city={city} />)}</div>;
+  const renderOfferCards = (items: Array<{ product: CatalogProductDto; entry: CollectionRef }>) => <div className="home-offer-grid">{items.map(({ product, entry }) => <CatalogProductCard key={`${entry.productId}:${entry.variantId ?? "product"}`} product={product} variantId={entry.variantId ?? undefined} city={city} categoryHref={catalogProductCategoryHref(catalogMenu, product)} />)}</div>;
 
   return <>
-    <section className="hero home-hero" aria-busy={bannerState === "loading"}>
-      {heroMedia && (heroIsVideo ? <BannerVideo src={heroMedia} className="hero-device home-hero-art home-hero-video" eager onError={() => markBannerMediaFailed(heroMedia)} /> : <img className="hero-device home-hero-art" src={heroMedia} alt="" aria-hidden="true" fetchPriority="high" onError={() => markBannerMediaFailed(heroMedia)} />)}
+    <section className="hero home-hero" aria-busy={bannerState === "loading"} onMouseEnter={() => setHeroPaused(true)} onMouseLeave={() => setHeroPaused(false)} onFocus={() => setHeroPaused(true)} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeroPaused(false); }}>
+      {heroMedia && (heroIsVideo ? <BannerVideo key={activeBanner?.id} src={heroMedia} className="hero-device home-hero-art home-hero-video" eager poster="/assets/home-hero-poster.jpg" onError={() => markBannerMediaFailed(heroMedia)} /> : <img key={activeBanner?.id} className="hero-device home-hero-art" src={heroMedia} alt="" aria-hidden="true" fetchPriority="high" onError={() => markBannerMediaFailed(heroMedia)} />)}
+      {!heroMedia && <div className="home-hero-fallback" aria-hidden="true" />}
       <div className="hero-copy home-hero-copy">
-        <h1>{activeBanner?.title?.trim() || fallbackTitle}</h1>
-        <Link className="primary-btn" href={activeBanner?.linkUrl || "/catalog"}>{activeBanner?.linkText || "Перейти в каталог"}<ArrowRight size={18} /></Link>
+        {activeBanner?.title?.trim() && <div className="home-hero-title"><h1>{activeBanner.title}</h1></div>}
+        {activeBanner?.subtitle?.trim() && <p className="home-hero-subtitle">{activeBanner.subtitle}</p>}
+        {activeBanner?.linkUrl && activeBanner.linkText?.trim() && <Link className="primary-btn" href={activeBanner.linkUrl}>{activeBanner.linkText}<ArrowRight size={18} /></Link>}
+        {!activeBanner && <div className="home-hero-title"><h1>{fallbackTitle}</h1></div>}
       </div>
+      {heroBanners.length > 1 && <><button type="button" className="home-hero-control home-hero-prev" aria-label="Предыдущий слайд" onClick={() => setHeroIndex((current) => (current - 1 + heroBanners.length) % heroBanners.length)}><ArrowLeft size={18} /></button><button type="button" className="home-hero-control home-hero-next" aria-label="Следующий слайд" onClick={() => setHeroIndex((current) => (current + 1) % heroBanners.length)}><ArrowRight size={18} /></button><div className="home-hero-dots" role="tablist" aria-label="Слайды">{heroBanners.map((banner, index) => <button key={banner.id} type="button" role="tab" aria-selected={index === heroIndex} aria-label={`Слайд ${index + 1}`} className={index === heroIndex ? "is-active" : ""} onClick={() => setHeroIndex(index)} />)}</div></>}
     </section>
 
     <div className="brand-grid home-brand-grid">
-      {brands.map((brand) => {
-        const banner = bannerByPlacement.get(brand.placement);
-        const bannerMedia = banner?.mediaUrl ?? null;
-        const visibleMedia = bannerMedia && !failedBannerMedia.includes(bannerMedia) ? bannerMedia : null;
-        const isVideo = banner?.mediaType?.startsWith("video/") ?? false;
-        return <Link className={`brand-card home-brand-card home-brand-${brand.tone}${visibleMedia ? " has-image" : ""}`} key={brand.name} href={`/catalog?brand=${encodeURIComponent(brand.filter)}`}>
-          {visibleMedia && (isVideo ? <BannerVideo src={visibleMedia} className="home-brand-media" onError={() => markBannerMediaFailed(visibleMedia)} /> : <img className="home-brand-media" src={visibleMedia} alt="" aria-hidden="true" loading="lazy" decoding="async" onError={() => markBannerMediaFailed(visibleMedia)} />)}
-          <div className="home-brand-copy"><div className="home-brand-label"><strong>{brand.name}</strong><span>{brand.desc}</span></div><span className="home-brand-arrow" aria-hidden="true"><ArrowRight size={17} /></span></div>
-        </Link>;
+      {catalogBrands.map((brand) => {
+        const visibleMedia = brand.imageUrl && !failedBannerMedia.includes(brand.imageUrl) ? brand.imageUrl : null;
+        const mediaIsVideo = brand.imageType?.startsWith("video/") ?? false;
+        const poster = brand.posterUrl && !failedBannerMedia.includes(brand.posterUrl) ? brand.posterUrl : null;
+        const content = <>{visibleMedia && (!mediaIsVideo ? <img className="home-brand-media" src={visibleMedia} alt={brand.imageAlt} aria-hidden="true" loading="eager" decoding="async" onError={() => markBannerMediaFailed(visibleMedia)} /> : <BannerVideo src={visibleMedia} className="home-brand-media" poster={poster ?? undefined} onError={() => markBannerMediaFailed(visibleMedia)} />)}<div className="home-brand-copy"><div className="home-brand-label"><strong>{brand.name}</strong>{brand.desc && <span>{brand.desc}</span>}</div>{brand.href && <span className="home-brand-arrow" aria-hidden="true"><ArrowRight size={17} /></span>}</div></>;
+        const className = `brand-card home-brand-card home-brand-${brand.tone}${visibleMedia || poster ? " has-image" : ""}`;
+        return brand.href ? <Link className={className} key={brand.id} href={brand.href}>{content}</Link> : <div className={className} key={brand.id}>{content}</div>;
       })}
     </div>
 

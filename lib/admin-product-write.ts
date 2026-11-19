@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { newId } from "@/lib/admin-db";
+import { calculateOldPrice } from "@/lib/product-price";
 
 export async function saveVariants(tx: any, productId: string, variants: any[]) {
   const cities = await tx.$queryRaw<any[]>`SELECT id FROM cities WHERE "isActive"=TRUE`;
@@ -22,9 +23,10 @@ export async function saveVariants(tx: any, productId: string, variants: any[]) 
       await tx.$executeRaw`INSERT INTO product_variants (id,"productId",sku,label,"canonicalKey","colorId",storage,ram,"simType",connectivity,size,material,attributes,"isActive","updatedAt") VALUES (${id},${productId},${sku},${label},${canonicalKey},${item.colorId ?? null},${item.storage ?? null},${item.ram ?? null},${item.simType ?? null},${item.connectivity ?? null},${item.size ?? null},${item.material ?? null},${JSON.stringify(item.attributes)}::jsonb,${item.active},NOW())`;
     }
     for (const city of item.inventory) {
+      const oldPrice = calculateOldPrice(city.price);
       const existing = await tx.$queryRaw<any[]>`SELECT id FROM inventory WHERE "variantId"=${id} AND "cityId"=${city.cityId} LIMIT 1`;
-      if (existing.length) await tx.$executeRaw`UPDATE inventory SET price=${city.price},"oldPrice"=${city.oldPrice ?? null},availability=${city.availability}::"AvailabilityStatus","allowPreorder"=${city.allowPreorder},"deliveryTime"=${city.deliveryTime ?? null},"isActive"=TRUE,"updatedAt"=NOW() WHERE id=${existing[0].id}`;
-      else await tx.$executeRaw`INSERT INTO inventory (id,"variantId","cityId",price,"oldPrice",availability,"allowPreorder","deliveryTime","updatedAt") VALUES (${newId()},${id},${city.cityId},${city.price},${city.oldPrice ?? null},${city.availability}::"AvailabilityStatus",${city.allowPreorder},${city.deliveryTime ?? null},NOW())`;
+      if (existing.length) await tx.$executeRaw`UPDATE inventory SET price=${city.price},"oldPrice"=${oldPrice},availability=${city.availability}::"AvailabilityStatus","allowPreorder"=${city.allowPreorder},"deliveryTime"=${city.deliveryTime ?? null},"isActive"=TRUE,"updatedAt"=NOW() WHERE id=${existing[0].id}`;
+      else await tx.$executeRaw`INSERT INTO inventory (id,"variantId","cityId",price,"oldPrice",availability,"allowPreorder","deliveryTime","updatedAt") VALUES (${newId()},${id},${city.cityId},${city.price},${oldPrice},${city.availability}::"AvailabilityStatus",${city.allowPreorder},${city.deliveryTime ?? null},NOW())`;
     }
   }
   return savedIds;

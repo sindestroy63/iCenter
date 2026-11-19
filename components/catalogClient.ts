@@ -3,6 +3,7 @@ export type CatalogVariantDto = {
   sku: string;
   label: string;
   attributes: Record<string, unknown>;
+  attributeLabels?: Record<string, string>;
   color: { id: string; name: string; nameRu?: string | null; slug: string; hex: string | null } | null;
   price: string | null;
   oldPrice: string | null;
@@ -25,7 +26,7 @@ export type CatalogProductDto = {
   isUsed?: boolean;
   brand: { id: string; name: string; slug: string };
   type: { id: string; name: string; slug: string; attributes?: unknown };
-  category: { id: string; name: string; slug: string; parentId?: string | null };
+  category: { id: string; name: string; slug: string; parentId?: string | null; href?: string | null };
   city: { name: string; slug: string };
   variants: CatalogVariantDto[];
   images: { id: string; src: string | null; alt: string; colorId: string | null; order: number }[];
@@ -37,11 +38,54 @@ export function variantAttribute(variant: CatalogVariantDto, key: string): strin
   return typeof value === "string" || typeof value === "number" ? String(value) : "";
 }
 
+const LEGACY_FEATURE_LABELS = new Map([
+    ["aluminum", "Алюминий"],
+    ["aluminium", "Алюминий"],
+    ["aluminum unibody", "Алюминиевый корпус"],
+    ["stainless steel", "Нержавеющая сталь"],
+    ["steel", "Сталь"],
+    ["titanium", "Титан"],
+    ["plastic", "Пластик"],
+    ["ceramic", "Керамика"],
+]);
+
 export function formatFeatureValue(value: string) {
-  return value.trim()
+  const trimmed = value.trim();
+  const localizedMaterial = LEGACY_FEATURE_LABELS.get(trimmed.toLocaleLowerCase("ru-RU"));
+  return (localizedMaterial ?? trimmed)
     .replace(/(\d+(?:[.,]\d+)?)\s*TB\b/gi, "$1 ТБ")
     .replace(/(\d+(?:[.,]\d+)?)\s*GB\b/gi, "$1 ГБ")
     .replace(/(\d+(?:[.,]\d+)?)\s*"/g, (_match, size: string) => `${size.replace(".", ",")}″`);
+}
+
+const ATTRIBUTE_LABELS: Record<string, string> = {
+  storage: "Объём памяти",
+  memory: "Объём памяти",
+  ram: "Оперативная память",
+  simType: "SIM-карта",
+  sim: "SIM-карта",
+  connectivity: "Подключение",
+  size: "Размер",
+  material: "Материал",
+  diagonal: "Диагональ",
+  displaySize: "Диагональ",
+  screenSize: "Диагональ",
+  resolution: "Разрешение",
+  power: "Мощность",
+  chip: "Процессор",
+  generation: "Поколение",
+  region: "Регион",
+  bundle: "Комплектация",
+  condition: "Состояние",
+  sovmestimost: "Совместимость",
+};
+
+export function catalogAttributeLabel(code: string): string {
+  const fallback = code
+    .replace(/([a-zа-яё0-9])([A-ZА-ЯЁ])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  return ATTRIBUTE_LABELS[code] ?? (fallback ? fallback.charAt(0).toLocaleUpperCase("ru-RU") + fallback.slice(1) : code);
 }
 
 function normalizeFeature(value: string) {

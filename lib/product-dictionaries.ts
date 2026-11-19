@@ -99,7 +99,7 @@ export const DICTIONARY_REGISTRY: readonly DictionaryDefinition[] = [
   { code: "productLine", label: "Линейка товара", source: "product_lines", scope: "ENTITY", filterOrder: null, applicableTypes: "ALL" },
 ] as const;
 
-const HIDDEN_LEGACY_DICTIONARIES = new Set<DictionaryCode>(["productModel", "productLine", "region"]);
+const HIDDEN_LEGACY_DICTIONARIES = new Set<DictionaryCode>(["productModel", "productLine"]);
 
 export const ADMIN_DICTIONARY_REGISTRY = DICTIONARY_REGISTRY.filter(
   (definition) => !HIDDEN_LEGACY_DICTIONARIES.has(definition.code),

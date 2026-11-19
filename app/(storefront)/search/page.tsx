@@ -4,3 +4,6 @@ export default function SearchPage({ searchParams }: { searchParams: { q?: strin
   const query = searchParams.q ?? "";
   return <CatalogView query={query} brand={searchParams.brand ?? ""} category={searchParams.category ?? ""} memory={searchParams.memory ?? ""} color={searchParams.color ?? ""} sim={searchParams.sim ?? ""} ram={searchParams.ram ?? ""} typeFilter={searchParams.type ?? ""} title={query ? `Результаты по запросу «${query}»` : "Поиск товаров"} />;
 }
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { title: "Поиск", robots: { index: false, follow: false } };

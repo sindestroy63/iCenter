@@ -8,10 +8,12 @@ export const dynamic = "force-dynamic";
 
 const typeSchema = z.enum(["categories", "brands"]);
 const nameSchema = z.string().trim().min(1).max(160);
-const slugSchema = z.string().trim().toLowerCase().min(1).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+const slugSchema = z.string().trim().toLowerCase().min(1).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional();
 const descriptionSchema = z.string().trim().max(2000);
 const orderSchema = z.number().int().min(-100000).max(100000);
 const activeSchema = z.boolean();
+const transliteration: Record<string, string> = { а:"a",б:"b",в:"v",г:"g",д:"d",е:"e",ё:"yo",ж:"zh",з:"z",и:"i",й:"y",к:"k",л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",х:"kh",ц:"ts",ч:"ch",ш:"sh",щ:"shch",ъ:"",ы:"y",ь:"",э:"e",ю:"yu",я:"ya" };
+const slugFromName = (value: string) => value.toLowerCase().replace(/[а-яё]/g, (letter) => transliteration[letter] ?? "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "item";
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "TAXONOMY_FAILED";
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
       : z.object(common).strict();
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
-    const value = parsed.data;
+    const value = { ...parsed.data, slug: parsed.data.slug ?? slugFromName(parsed.data.name) };
     const db = adminDb();
     const id = newId();
     await db.$transaction(async (tx) => {
@@ -112,7 +114,7 @@ export async function PATCH(request: Request) {
       : z.object(common).strict();
     const parsed = schema.safeParse(await request.json());
     if (!parsed.success || !parsed.data || Object.keys(parsed.data).length < 2) return NextResponse.json({ error: "INVALID_VALUE" }, { status: 400 });
-    const value = parsed.data;
+    const value = { ...parsed.data, slug: parsed.data.slug };
     const db = adminDb();
     await db.$transaction(async (tx) => {
       const table = type.data;
@@ -128,16 +130,18 @@ export async function PATCH(request: Request) {
       }
       if (table === "categories") {
         const category = value as typeof value & { parentId?: string | null };
+        const nextSlug = category.slug ?? (category.name && String(existing[0].slug) === slugFromName(String(existing[0].name)) ? slugFromName(category.name) : String(existing[0].slug));
         if (Object.hasOwn(category, "parentId")) await validateParent(tx, category.parentId, value.id);
         await tx.$executeRaw`
-          UPDATE categories SET name=COALESCE(${category.name ?? null},name),slug=COALESCE(${category.slug ?? null},slug),
+          UPDATE categories SET name=COALESCE(${category.name ?? null},name),slug=${nextSlug},
             description=COALESCE(${category.description ?? null},description),
             "parentId"=CASE WHEN ${Object.hasOwn(category, "parentId")} THEN ${category.parentId ?? null} ELSE "parentId" END,
             "sortOrder"=COALESCE(${category.sortOrder ?? null},"sortOrder"),"isActive"=COALESCE(${category.isActive ?? null},"isActive"),"updatedAt"=NOW()
           WHERE id=${value.id}
         `;
       } else {
-        await tx.$executeRaw`UPDATE brands SET name=COALESCE(${value.name ?? null},name),slug=COALESCE(${value.slug ?? null},slug),description=COALESCE(${value.description ?? null},description),"sortOrder"=COALESCE(${value.sortOrder ?? null},"sortOrder"),"isActive"=COALESCE(${value.isActive ?? null},"isActive"),"updatedAt"=NOW() WHERE id=${value.id}`;
+        const nextSlug = value.slug ?? (value.name && String(existing[0].slug) === slugFromName(String(existing[0].name)) ? slugFromName(value.name) : String(existing[0].slug));
+        await tx.$executeRaw`UPDATE brands SET name=COALESCE(${value.name ?? null},name),slug=${nextSlug},description=COALESCE(${value.description ?? null},description),"sortOrder"=COALESCE(${value.sortOrder ?? null},"sortOrder"),"isActive"=COALESCE(${value.isActive ?? null},"isActive"),"updatedAt"=NOW() WHERE id=${value.id}`;
       }
       const after = table === "categories"
         ? (await tx.$queryRaw<any[]>`SELECT id,name,slug,description,"parentId","sortOrder","isActive" FROM categories WHERE id=${value.id}`)[0]

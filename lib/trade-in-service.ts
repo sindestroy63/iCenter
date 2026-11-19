@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { decryptPii, encryptPii, requestHash } from "@/lib/request-pii";
 import { dualConsentEvidence, PERSONAL_DATA_CONSENT_VERSION, type ConsentEvidence } from "@/lib/consent-evidence";
 import { writeAuditLog } from "@/lib/admin-audit";
+import { removeLeadPhotoUrls } from "@/lib/lead-upload";
 
 declare global { var tradeInPrisma: PrismaClient | undefined; }
 const statuses = new Set(["NEW", "PROCESSING", "CONTACTED", "COMPLETED", "CANCELLED"]);
@@ -47,17 +48,17 @@ export async function createTradeInLead(input: TradeInInput, idempotencyKey: str
   const encrypted = encryptPii(pii);
   const requestNumber = `${input.requestType === "installment" ? "IN" : "TI"}-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${randomBytes(4).toString("hex").toUpperCase()}`;
   const id = `c${randomBytes(12).toString("hex")}`;
-  const inserted = await client.$queryRaw<Array<{ requestNumber: string }>>`
+  const inserted = await client.$queryRaw<Array<{ id: string; requestNumber: string }>>`
     INSERT INTO trade_in_requests (id,"requestNumber","idempotencyKey","requestHash","cityId","productId","productNameSnapshot","encryptedPiiPayload",source,status,"consentAt","consentVersion","createdAt","updatedAt")
     VALUES (${id},${requestNumber},${idempotencyKey},${hash},${city.id},${product?.id ?? null},${product?.name ?? (input.desiredDevice.trim() || null)},${encrypted},'trade_in','NEW',NOW(),${PERSONAL_DATA_CONSENT_VERSION},NOW(),NOW())
     ON CONFLICT ("idempotencyKey") DO NOTHING
-    RETURNING "requestNumber"
+    RETURNING id,"requestNumber"
   `;
-  if (inserted[0]) return { requestNumber: inserted[0].requestNumber, replayed: false, productName: product?.name ?? input.desiredDevice.trim() };
-  const prior = await client.$queryRaw<Array<{ requestNumber: string; requestHash: string }>>`SELECT "requestNumber","requestHash" FROM trade_in_requests WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1`;
+  if (inserted[0]) return { id: inserted[0].id, requestNumber: inserted[0].requestNumber, replayed: false, productName: product?.name ?? input.desiredDevice.trim() };
+  const prior = await client.$queryRaw<Array<{ id: string; requestNumber: string; requestHash: string }>>`SELECT id,"requestNumber","requestHash" FROM trade_in_requests WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1`;
   if (!prior[0]) throw new Error("TRADE_IN_SAVE_FAILED");
   if (prior[0].requestHash !== hash) throw new Error("IDEMPOTENCY_CONFLICT");
-  return { requestNumber: prior[0].requestNumber, replayed: true, productName: product?.name ?? input.desiredDevice.trim() };
+  return { id: prior[0].id, requestNumber: prior[0].requestNumber, replayed: true, productName: product?.name ?? input.desiredDevice.trim() };
 }
 
 export type TradeInViewer = { userId: string; role: string; sessionId?: string; name?: string | null };
@@ -124,4 +125,39 @@ export async function updateTradeInStatus(viewer: TradeInViewer, requestNumber: 
     if (viewer.sessionId) await writeAuditLog(tx, { ...viewer, sessionId: viewer.sessionId }, { action: "lead.status_updated", entityType: "trade_in_request", entityId: rows[0].id, changes: { status: { old: rows[0].status, new: status } }, metadata: { cityId: rows[0].cityId, requestType: "trade_in_or_installment" } });
     return status;
   });
+}
+
+export async function deleteTradeInLead(viewer: TradeInViewer, requestNumber: string, expectedType: LeadRequestType) {
+  if (viewer.role !== "OWNER" && viewer.role !== "ADMIN") throw new Error("FORBIDDEN");
+  const client = db();
+  const photoUrls = await client.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ id: string; cityId: string; encryptedPiiPayload: string }>>`
+      SELECT id,"cityId","encryptedPiiPayload" FROM trade_in_requests
+      WHERE "requestNumber"=${requestNumber}
+      LIMIT 1 FOR UPDATE
+    `;
+    const lead = rows[0];
+    if (!lead) throw new Error("NOT_FOUND");
+    const pii = decryptPii<Partial<{ requestType: LeadRequestType; photoUrls: string[] }>>(lead.encryptedPiiPayload);
+    if ((pii.requestType ?? "trade_in") !== expectedType) throw new Error("NOT_FOUND");
+    const references = await tx.$queryRaw<Array<{ tableName: string }>>`
+      SELECT child.relname AS "tableName"
+      FROM pg_constraint constraint_row
+      JOIN pg_class child ON child.oid=constraint_row.conrelid
+      WHERE constraint_row.contype='f'
+        AND constraint_row.confrelid=to_regclass('public.trade_in_requests')
+    `;
+    if (references.length) throw new Error("RELATED_RECORDS");
+    if (viewer.sessionId) await writeAuditLog(tx, { ...viewer, sessionId: viewer.sessionId }, {
+      action: "lead.deleted",
+      entityType: expectedType === "installment" ? "installment_request" : "trade_in_request",
+      entityId: lead.id,
+      changes: { deleted: { old: true, new: null } },
+      metadata: { cityId: lead.cityId, requestType: expectedType, requestNumber },
+    });
+    await tx.$executeRaw`DELETE FROM trade_in_requests WHERE id=${lead.id}`;
+    return Array.isArray(pii.photoUrls) ? pii.photoUrls : [];
+  });
+  const cleanup = await removeLeadPhotoUrls(photoUrls);
+  if (cleanup.failed) console.error("admin lead photo cleanup incomplete", { failed: cleanup.failed });
 }

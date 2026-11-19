@@ -8,7 +8,7 @@ type Media = { id: string; filename: string; url: string; mimeType: string; alt?
 type Payload = { menu: CatalogMenuConfig; options: MenuTaxonomy };
 const csrf = () => decodeURIComponent(document.cookie.split("; ").find((part) => part.startsWith("icenter_csrf="))?.split("=")[1] ?? "");
 const sorted = (items: CatalogMenuNode[], parentId: string | null) => items.filter((item) => item.parentId === parentId).sort((a, b) => a.sortOrder - b.sortOrder || a.title.localeCompare(b.title, "ru"));
-const newNode = (id: string, parentId: string | null, sortOrder: number): CatalogMenuNode => ({ id, parentId, title: "Новый раздел", description: "", visible: true, sortOrder, action: null, ...(parentId === null ? { banner: { enabled: false, imageMediaId: null, alt: "", description: "" } } : {}) });
+const newNode = (id: string, parentId: string | null, sortOrder: number): CatalogMenuNode => ({ id, parentId, title: "Новый раздел", description: "", visible: true, sortOrder, action: null, banner: { enabled: false, imageMediaId: null, alt: "", description: "" } });
 const actionKind = (action: CatalogMenuAction | null) => action?.type ?? "none";
 const actionLabel = (action: CatalogMenuAction | null) => {
   if (!action) return "Без перехода";
@@ -62,7 +62,7 @@ export default function AdminCatalogMenu() {
     setPayload({ ...payload!, menu: { ...config, items: [...config.items, item] } }); setSelectedId(item.id);
   }
   function addChild(parent: CatalogMenuNode) {
-    if (!config || depthOf(config.items, parent.id) >= 2) return;
+    if (!config || config.items.length >= 500) return;
     const item = newNode(crypto.randomUUID(), parent.id, sorted(config.items, parent.id).length);
     setPayload({ ...payload!, menu: { ...config, items: [...config.items, item] } }); setSelectedId(item.id);
   }
@@ -83,12 +83,11 @@ export default function AdminCatalogMenu() {
   function changeParent(parentId: string) {
     if (!config || !selected) return;
     const excluded = descendantsOf(config.items, selected.id); excluded.add(selected.id);
-    const subtreeHeight = maxDescendantDepth(config.items, selected.id);
     const parent = parentId ? config.items.find((item) => item.id === parentId) : null;
-    if (parent && (excluded.has(parent.id) || depthOf(config.items, parent.id) + 1 + subtreeHeight > 2)) return;
+    if (parent && excluded.has(parent.id)) return;
     const nextItems = config.items.map((item) => {
       if (item.id !== selected.id) return item;
-      if (parentId) { const { banner: _banner, ...withoutBanner } = item; return { ...withoutBanner, parentId, sortOrder: sorted(config.items, parentId).length }; }
+      if (parentId) return { ...item, parentId, sortOrder: sorted(config.items, parentId).length };
       return { ...item, parentId: null, sortOrder: sorted(config.items, null).length, banner: item.banner ?? { enabled: false, imageMediaId: null, alt: "", description: "" } };
     });
     setPayload({ ...payload!, menu: { ...config, items: nextItems } });
@@ -112,7 +111,7 @@ export default function AdminCatalogMenu() {
     if (selected && action?.type === "filters" && action.rules.length < 8) patch(selected.id, { action: { type: "filters", rules: [...action.rules, { field: "brand", value: payload?.options.brands[0]?.id ?? "" }] } });
   }
   function upload(file?: File) {
-    if (!file || !selected || selected.parentId !== null) return;
+    if (!file || !selected) return;
     setBusy(true); setError(""); const form = new FormData(); form.set("file", file); form.set("purpose", "catalog-menu");
     fetch("/api/admin/media", { method: "POST", headers: { "x-csrf-token": csrf(), "x-upload-purpose": "catalog-menu" }, body: form }).then(async (response) => {
       const result = await response.json(); if (!response.ok || !result.data?.id) throw new Error(result.error ?? "Не удалось загрузить изображение.");
@@ -148,17 +147,17 @@ export default function AdminCatalogMenu() {
   const availableValues = (field: CatalogMenuRule["field"]) => {
     const rules = ancestorRules(selected); const brandId = rules.find((rule) => rule.field === "brand")?.value; const typeId = rules.find((rule) => rule.field === "type")?.value;
     if (field === "brand") return payload?.options.brands ?? [];
-    if (field === "type") return (payload?.options.types ?? []).filter((type) => !brandId || type.brandId === brandId);
+    if (field === "type") return payload?.options.types ?? [];
     if (field === "category") return payload?.options.categories ?? [];
     if (field === "model") {
       const type = payload?.options.types.find((entry) => entry.id === typeId);
-      return filterMenuModels(payload?.options.models ?? [], typeof brandId === "string" ? brandId : undefined, type?.globalProductTypeId);
+      return filterMenuModels(payload?.options.models ?? [], typeof brandId === "string" ? brandId : undefined, type?.globalProductTypeId ?? type?.id);
     }
     return [];
   };
   const parentOptions = selected && config ? config.items.filter((candidate) => {
     if (candidate.id === selected.id || descendantsOf(config.items, selected.id).has(candidate.id)) return false;
-    return depthOf(config.items, candidate.id) + 1 + maxDescendantDepth(config.items, selected.id) <= 2;
+    return true;
   }) : [];
 
   return <main className="admin-content admin-workspace">
@@ -180,8 +179,8 @@ export default function AdminCatalogMenu() {
           {rule.field === "tradeIn" ? <span>Да</span> : <select aria-label="Значение фильтра" value={String(rule.value)} onChange={(e) => changeRule(index, { value: e.target.value })}>{availableValues(rule.field).map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</select>}
           <button type="button" className="admin-icon-button danger" aria-label="Удалить условие" onClick={() => removeRule(index)}><Trash2 size={15} /></button>
         </div>)}<button type="button" className="admin-secondary" disabled={selected.action.rules.length >= 8} onClick={addRule}><Plus size={15} />Добавить условие</button></div>}
-        {selected.parentId === null && <section className="catalog-menu-banner-editor"><h3>Баннер раздела</h3><label className="admin-check"><input type="checkbox" checked={selected.banner?.enabled ?? false} onChange={(e) => patch(selected.id, { banner: { enabled: e.target.checked, imageMediaId: selected.banner?.imageMediaId ?? null, alt: selected.banner?.alt ?? "", description: selected.banner?.description ?? "" } })} />Показывать баннер</label><label className="admin-form-label">Изображение<select value={selected.banner?.imageMediaId ?? ""} onChange={(e) => patch(selected.id, { banner: { enabled: Boolean(e.target.value), imageMediaId: e.target.value || null, alt: selected.banner?.alt ?? "", description: selected.banner?.description ?? "" } })}><option value="">Без изображения</option>{media.map((item) => <option key={item.id} value={item.id}>{item.filename}</option>)}</select></label><label className="admin-secondary catalog-menu-upload"><Upload size={15} />Загрузить изображение<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(e) => { upload(e.currentTarget.files?.[0]); e.currentTarget.value = ""; }} /></label>{selectedMedia && <div className="catalog-menu-preview"><img src={selectedMedia.url} alt={selected.banner?.alt ?? ""} /><button type="button" className="admin-secondary" onClick={() => patch(selected.id, { banner: { enabled: false, imageMediaId: null, alt: "", description: selected.banner?.description ?? "" } })}><Trash2 size={14} />Убрать</button></div>}<label className="admin-form-label">Альтернативный текст<input maxLength={300} value={selected.banner?.alt ?? ""} onChange={(e) => patch(selected.id, { banner: { enabled: selected.banner?.enabled ?? false, imageMediaId: selected.banner?.imageMediaId ?? null, alt: e.target.value, description: selected.banner?.description ?? "" } })} /></label><label className="admin-form-label">Подпись баннера<input maxLength={240} value={selected.banner?.description ?? ""} onChange={(e) => patch(selected.id, { banner: { enabled: selected.banner?.enabled ?? false, imageMediaId: selected.banner?.imageMediaId ?? null, alt: selected.banner?.alt ?? "", description: e.target.value } })} /></label></section>}
-        {config && depthOf(config.items, selected.id) < 2 && <button type="button" className="admin-secondary catalog-menu-add-child" onClick={() => addChild(selected)}><Plus size={15} />Добавить подраздел</button>}
+        {<section className="catalog-menu-banner-editor"><h3>Изображение раздела</h3><label className="admin-check"><input type="checkbox" checked={selected.banner?.enabled ?? false} onChange={(e) => patch(selected.id, { banner: { enabled: e.target.checked, imageMediaId: selected.banner?.imageMediaId ?? null, alt: selected.banner?.alt ?? "", description: selected.banner?.description ?? "" } })} />Показывать изображение</label><label className="admin-form-label">Изображение каталога<select value={selected.banner?.imageMediaId ?? ""} onChange={(e) => patch(selected.id, { banner: { enabled: Boolean(e.target.value), imageMediaId: e.target.value || null, alt: selected.banner?.alt ?? "", description: selected.banner?.description ?? "" } })}><option value="">Без изображения</option>{media.map((item) => <option key={item.id} value={item.id}>{item.filename}</option>)}</select></label><label className="admin-secondary catalog-menu-upload"><Upload size={15} />Загрузить изображение<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(e) => { upload(e.currentTarget.files?.[0]); e.currentTarget.value = ""; }} /></label>{selectedMedia && <div className="catalog-menu-preview"><img src={selectedMedia.url} alt={selected.banner?.alt ?? ""} /><button type="button" className="admin-secondary" onClick={() => patch(selected.id, { banner: { enabled: false, imageMediaId: null, alt: "", description: selected.banner?.description ?? "" } })}><Trash2 size={14} />Убрать</button></div>}<label className="admin-form-label">Альтернативный текст<input maxLength={300} value={selected.banner?.alt ?? ""} onChange={(e) => patch(selected.id, { banner: { enabled: selected.banner?.enabled ?? false, imageMediaId: selected.banner?.imageMediaId ?? null, alt: e.target.value, description: selected.banner?.description ?? "" } })} /></label><label className="admin-form-label">Подпись изображения<input maxLength={240} value={selected.banner?.description ?? ""} onChange={(e) => patch(selected.id, { banner: { enabled: selected.banner?.enabled ?? false, imageMediaId: selected.banner?.imageMediaId ?? null, alt: selected.banner?.alt ?? "", description: e.target.value } })} /></label>{!selected.parentId && <label className="admin-form-label">Промоизображение главной и мобильного меню<select value={selected.promoBanner?.imageMediaId ?? ""} onChange={(e) => patch(selected.id, { promoBanner: { enabled: Boolean(e.target.value), imageMediaId: e.target.value || null, alt: selected.promoBanner?.alt ?? "", description: selected.promoBanner?.description ?? "" } })}><option value="">Использовать изображение каталога</option>{media.map((item) => <option key={item.id} value={item.id}>{item.filename}</option>)}</select></label>}</section>}
+        {config && config.items.length < 500 && <button type="button" className="admin-secondary catalog-menu-add-child" onClick={() => addChild(selected)}><Plus size={15} />Добавить подраздел</button>}
       </> : <div className="catalog-menu-empty"><h2>Выберите раздел меню</h2><p>Создайте верхний пункт, затем настройте переходы и подразделы.</p></div>}</section>
     </div>}
   </main>;
@@ -191,8 +190,4 @@ function depthOf(items: CatalogMenuNode[], id: string) {
   let depth = 0; let current = items.find((item) => item.id === id); const seen = new Set<string>();
   while (current?.parentId) { if (seen.has(current.id)) return 99; seen.add(current.id); current = items.find((item) => item.id === current!.parentId); depth++; }
   return depth;
-}
-function maxDescendantDepth(items: CatalogMenuNode[], id: string): number {
-  const children = items.filter((item) => item.parentId === id);
-  return children.length ? 1 + Math.max(...children.map((item) => maxDescendantDepth(items, item.id))) : 0;
 }

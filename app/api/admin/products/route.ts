@@ -8,6 +8,8 @@ import { adminDb, newId } from "@/lib/admin-db";
 import { auditInventoryChanges, getProductAuditSnapshot, getProductInventorySnapshot, productAuditChanges, writeAuditLog } from "@/lib/admin-audit";
 import { saveImages, saveVariants } from "@/lib/admin-product-write";
 import { allocateProductSlug, parseSlugAliases, productSlugBase as slugFromName } from "@/lib/product-slug";
+import { PRODUCT_ORDER_LOCK_KEY } from "@/lib/product-manual-order";
+import { calculateOldPrice } from "@/lib/product-price";
 
 export const dynamic = "force-dynamic";
 
@@ -51,22 +53,22 @@ async function syncDictionaryLinks(
     scope: "PRODUCT" | "VARIANT",
   ) => {
     const definition = byCode.get(code);
-    if (!definition || definition.scope !== scope || !definition.isActive)
+    if (!definition || definition.scope !== scope)
       throw new Error("INVALID_DICTIONARY_REFERENCE");
     const valid = await tx.$queryRaw<
       any[]
-    >`SELECT id,label FROM attribute_options WHERE id=${optionId} AND "definitionId"=${definition.id} AND "isActive"=TRUE`;
+    >`SELECT id,label,"isActive" FROM attribute_options WHERE id=${optionId} AND "definitionId"=${definition.id}`;
     if (!valid[0]) throw new Error("INVALID_DICTIONARY_REFERENCE");
-    if (scope === "PRODUCT") {
-      const applicable = await tx.$queryRaw<
-        any[]
-      >`SELECT 1 FROM product_type_attributes WHERE "productTypeId"=${product.productTypeId} AND "definitionId"=${definition.id} LIMIT 1`;
-      if (!applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
+    if (!definition.isActive || !valid[0].isActive) {
+      const existing = scope === "PRODUCT"
+        ? await tx.$queryRaw<any[]>`SELECT 1 FROM product_attribute_values WHERE "productId"=${ownerId} AND "definitionId"=${definition.id} AND "optionId"=${optionId} LIMIT 1`
+        : await tx.$queryRaw<any[]>`SELECT 1 FROM product_variant_attribute_values WHERE "variantId"=${ownerId} AND "definitionId"=${definition.id} AND "optionId"=${optionId} LIMIT 1`;
+      if (!existing.length) throw new Error("INVALID_DICTIONARY_REFERENCE");
     }
-    if (scope === "VARIANT") {
-      const applicable = await tx.$queryRaw<any[]>`SELECT 1 FROM product_type_attributes WHERE "productTypeId"=${product.productTypeId} AND "definitionId"=${definition.id} AND scope='VARIANT' LIMIT 1`;
-      if (!applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
-    }
+    const applicable = await tx.$queryRaw<
+      any[]
+    >`SELECT 1 FROM global_product_type_attributes WHERE "productTypeId"=${product.globalProductTypeId} AND "definitionId"=${definition.id} AND scope=${scope} LIMIT 1`;
+    if (!applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
     if (scope === "PRODUCT")
       await tx.$executeRaw`INSERT INTO product_attribute_values ("productId","definitionId","optionId") VALUES (${ownerId},${definition.id},${optionId}) ON CONFLICT ("productId","definitionId") DO UPDATE SET "optionId"=EXCLUDED."optionId","updatedAt"=NOW()`;
     else
@@ -115,7 +117,6 @@ async function syncDictionaryLinks(
       if (
         !definition ||
         definition.scope !== "VARIANT" ||
-        !definition.isActive ||
         selectedDefinitions.has(definition.id)
       )
         throw new Error("INVALID_DICTIONARY_REFERENCE");
@@ -161,8 +162,8 @@ async function syncDictionaryLinks(
 }
 const priceSchema = z.object({
   cityId: z.string().min(1),
-  price: z.number().finite().nonnegative().nullable(),
-  oldPrice: z.number().finite().nonnegative().nullable().optional(),
+  price: z.number().int().nonnegative().nullable(),
+  oldPrice: z.unknown().optional(),
   availability: z.enum(["UNSPECIFIED", "IN_STOCK", "PREORDER", "OUT_OF_STOCK"]),
   allowPreorder: z.boolean().default(false),
   deliveryTime: z.string().max(180).nullable().optional(),
@@ -200,8 +201,8 @@ const productSchema = z
       .max(160)
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     brandId: z.string().min(1),
-    productTypeId: z.string().optional().default(""),
-    globalProductTypeId: z.string().optional().default(""),
+    productTypeId: z.string().nullable().optional().default(null),
+    globalProductTypeId: z.string().min(1),
     productLineId: z.string().nullable().optional(),
     categoryId: z.string().min(1),
     modelId: z.string().nullable().optional(),
@@ -259,17 +260,15 @@ const productSchema = z
 
 async function resolveProductModel(
   tx: any,
-  product: { modelId?: string | null; brandId: string; productTypeId?: string },
+  product: { modelId?: string | null; brandId: string; globalProductTypeId: string },
   currentModelId?: string | null,
 ) {
   if (!product.modelId) return null;
   const rows = await tx.$queryRaw<any[]>`
     SELECT m.id,m.name,m."isActive"
     FROM product_models m
-    JOIN legacy_product_type_mappings mapping ON mapping."globalProductTypeId"=m."globalProductTypeId"
     JOIN global_product_types g ON g.id=m."globalProductTypeId" AND g."isActive"=TRUE
-    JOIN global_product_type_brands link ON link."productTypeId"=g.id AND link."brandId"=m."brandId"
-    WHERE m.id=${product.modelId} AND m."brandId"=${product.brandId} AND mapping."legacyProductTypeId"=${product.productTypeId ?? ""}
+    WHERE m.id=${product.modelId} AND m."brandId"=${product.brandId} AND g.id=${product.globalProductTypeId}
     LIMIT 1
   `;
   if (!rows.length || (!rows[0].isActive && currentModelId !== product.modelId))
@@ -344,7 +343,7 @@ function validationMessage(error: z.ZodError) {
   if (path === "slug")
     return "Slug должен содержать латинские буквы, цифры и дефисы.";
   if (path === "name") return "Укажите название товара (до 240 символов).";
-  if (/^variants\.\d+\.inventory\.\d+\.(price|oldPrice)$/.test(path))
+  if (/^variants\.\d+\.inventory\.\d+\.price$/.test(path))
     return "Проверьте цены: укажите число не меньше нуля или оставьте поле пустым.";
   if (/^variants\.\d+\.inventory\.\d+\.cityId$/.test(path))
     return "Не удалось определить город у одной из цен.";
@@ -359,7 +358,7 @@ function validationMessage(error: z.ZodError) {
   return "Проверьте обязательные поля товара, цены и фотографии.";
 }
 
-function mutationFailure(error: unknown, action: "create" | "update") {
+function mutationFailure(error: unknown, action: "create" | "update" | "delete") {
   if (error instanceof Error && error.message === "INVALID_RELATED_PRODUCTS")
     return { status: 400, message: "INVALID_RELATED_PRODUCTS" };
   if (
@@ -429,6 +428,7 @@ function mutationFailure(error: unknown, action: "create" | "update") {
   if (error instanceof Error) {
     const known = new Map<string, readonly [number, string]>([
       ["UNAUTHORIZED", [401, "Требуется вход."]],
+      ["FORBIDDEN", [403, "Недостаточно прав."]],
       [
         "CSRF_INVALID",
         [
@@ -547,16 +547,17 @@ function mutationFailure(error: unknown, action: "create" | "update") {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    await requireGlobalAdminSession();
+    const session = await requireGlobalAdminSession();
+    const scope = new URL(request.url).searchParams.get("scope") === "used" ? "used" : "new";
     const db = adminDb();
     const rows = await db.$queryRaw<any[]>`
-      SELECT p.id, p.name, p.slug, p."brandId", b.name AS "brandName", p."productTypeId", g.name AS "typeName", mapping."globalProductTypeId" AS "globalTypeId", p."productLineId", p."categoryId", c.name AS "categoryName", p."modelId", pm.name AS "linkedModelName", pm."isActive" AS "linkedModelActive", p.model, p.generation, p.chip, p."displaySize", p."releaseYear", p.description, p.specifications, p."isNew", p.status::text AS status,
+      SELECT p.id, p.name, p.slug, p."manualOrder", p."brandId", b.name AS "brandName", p."productTypeId", p."globalProductTypeId" AS "globalTypeId", g.name AS "typeName", p."productLineId", p."categoryId", c.name AS "categoryName", p."modelId", pm.name AS "linkedModelName", pm."isActive" AS "linkedModelActive", p.model, p.generation, p.chip, p."displaySize", p."releaseYear", p.description, p.specifications, p."isNew", p.status::text AS status,
         v.id AS "variantId", v.sku, v.label, v."colorId", co.name AS "colorName", to_jsonb(co)->>'nameRu' AS "colorNameRu", v.storage, v.ram, v."simType", v.connectivity, v.size, v.material, v.attributes AS "variantAttributes", v."isActive" AS "variantActive",
         i.id AS "inventoryId", i."cityId", ci.name AS "cityName", ci.slug AS "citySlug", i.price::text AS price, i."oldPrice"::text AS "oldPrice", i.availability::text AS availability, i."allowPreorder", i."deliveryTime",
         pg."mediaId" AS "mediaId", pg."sortOrder" AS "imageOrder", NULL::text AS "imageColorId", m."storagePath", m.alt AS "imageAlt"
-      FROM products p JOIN brands b ON b.id=p."brandId" JOIN product_types pt ON pt.id=p."productTypeId" LEFT JOIN legacy_product_type_mappings mapping ON mapping."legacyProductTypeId"=pt.id LEFT JOIN global_product_types g ON g.id=mapping."globalProductTypeId" JOIN categories c ON c.id=p."categoryId"
+      FROM products p JOIN brands b ON b.id=p."brandId" LEFT JOIN product_types pt ON pt.id=p."productTypeId" LEFT JOIN global_product_types g ON g.id=p."globalProductTypeId" JOIN categories c ON c.id=p."categoryId"
       LEFT JOIN product_models pm ON pm.id=p."modelId"
       LEFT JOIN product_variants v ON v."productId"=p.id
       LEFT JOIN colors co ON co.id=v."colorId"
@@ -564,7 +565,9 @@ export async function GET() {
       LEFT JOIN cities ci ON ci.id=i."cityId"
       LEFT JOIN product_gallery_images pg ON pg."productId"=p.id
       LEFT JOIN media m ON m.id=pg."mediaId"
-      ORDER BY p.name, v.sku, ci.name, pg."sortOrder"
+      WHERE (${scope}='used' AND p.specifications @> '{"tradeIn":true}'::jsonb)
+         OR (${scope}='new' AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb))
+      ORDER BY p."manualOrder", p.name, p.id, v.sku, ci.name, pg."sortOrder"
     `;
     const relatedTable = await db.$queryRaw<Array<{ relation: string | null }>>`
       SELECT to_regclass('public.product_related_products')::text AS relation
@@ -589,7 +592,7 @@ export async function GET() {
       >`SELECT id,name,slug FROM brands WHERE "isActive"=TRUE ORDER BY "sortOrder",name`,
       db.$queryRaw<
         any[]
-      >`SELECT pt.id,g.name,pt.slug,pt."brandId",pt."variantAttributes",g.id AS "globalTypeId",g."canonicalKey" AS "globalTypeKey" FROM product_types pt JOIN legacy_product_type_mappings mapping ON mapping."legacyProductTypeId"=pt.id JOIN global_product_types g ON g.id=mapping."globalProductTypeId" JOIN global_product_type_brands link ON link."productTypeId"=g.id AND link."brandId"=pt."brandId" WHERE pt."isActive"=TRUE AND g."isActive"=TRUE ORDER BY g."sortOrder",g.name,pt."sortOrder"`,
+      >`SELECT g.id, g.name, g."canonicalKey" AS "globalTypeKey", g."isActive" FROM global_product_types g WHERE g."isActive"=TRUE ORDER BY g."sortOrder",g.name`,
       db.$queryRaw<
         any[]
       >`SELECT id,name,slug,"parentId" FROM categories WHERE "isActive"=TRUE ORDER BY "sortOrder",name`,
@@ -635,6 +638,7 @@ export async function GET() {
       if (!product) {
         product = {
           id: row.id,
+          manualOrder: row.manualOrder,
           name: row.name,
           slug: row.slug,
           brandId: row.brandId,
@@ -696,7 +700,7 @@ export async function GET() {
             cityName: row.cityName,
             citySlug: row.citySlug,
             price: row.price === null ? null : Number(row.price),
-            oldPrice: row.oldPrice === null ? null : Number(row.oldPrice),
+            oldPrice: calculateOldPrice(row.price),
             availability: row.availability,
             allowPreorder: row.allowPreorder,
             deliveryTime: row.deliveryTime,
@@ -752,6 +756,7 @@ export async function GET() {
         productLines,
         models,
       },
+      role: session.role,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -782,6 +787,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const session = await requireGlobalAdminMutation(request);
+    const scope = new URL(request.url).searchParams.get("scope") === "used" ? "used" : "new";
     const parsed = productSchema.safeParse(await request.json());
     if (!parsed.success)
       return NextResponse.json(
@@ -789,16 +795,17 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const product = parsed.data;
+    if ((scope === "used") !== (product.specifications.tradeIn === true))
+      return NextResponse.json({ error: "Тип редактора не соответствует типу товара." }, { status: 400 });
     const db = adminDb();
     await db.$transaction(
       async (tx) => {
-        const [brand, type, category, line] = await Promise.all([
+        const [brand, type, legacyType, category, line] = await Promise.all([
           tx.$queryRaw<
             any[]
           >`SELECT id FROM brands WHERE id=${product.brandId} AND "isActive"=TRUE`,
-          tx.$queryRaw<
-            any[]
-          >`SELECT pt.id FROM product_types pt JOIN legacy_product_type_mappings mapping ON mapping."legacyProductTypeId"=pt.id JOIN global_product_types g ON g.id=mapping."globalProductTypeId" JOIN global_product_type_brands link ON link."productTypeId"=g.id AND link."brandId"=${product.brandId} WHERE pt.id=${product.productTypeId} AND pt."isActive"=TRUE AND g."isActive"=TRUE AND pt."brandId"=${product.brandId}`,
+          tx.$queryRaw<any[]>`SELECT id FROM global_product_types WHERE id=${product.globalProductTypeId} AND "isActive"=TRUE`,
+          tx.$queryRaw<any[]>`SELECT pt.id FROM product_types pt JOIN legacy_product_type_mappings m ON m."legacyProductTypeId"=pt.id WHERE m."globalProductTypeId"=${product.globalProductTypeId} AND pt."brandId"=${product.brandId} AND pt."isActive"=TRUE ORDER BY pt.id LIMIT 1`,
           tx.$queryRaw<
             any[]
           >`SELECT id FROM categories WHERE id=${product.categoryId} AND "isActive"=TRUE`,
@@ -810,10 +817,15 @@ export async function POST(request: Request) {
         ]);
         if (!brand.length || !type.length || !category.length || !line.length)
           throw new Error("INVALID_REFERENCE");
-        const selectedModel = await resolveProductModel(tx, product);
+        product.productTypeId = product.productTypeId || legacyType[0]?.id || null;
+          const selectedModel = await resolveProductModel(tx, product);
         const slug = await uniqueSlug(tx, product.name);
         const id = newId();
-        await tx.$executeRaw`INSERT INTO products (id,name,slug,"brandId","productTypeId","productLineId","categoryId","modelId",model,generation,chip,"displaySize","releaseYear",description,specifications,"isNew",status,"updatedAt") VALUES (${id},${product.name},${slug},${product.brandId},${product.productTypeId},${product.productLineId ?? null},${product.categoryId},${selectedModel?.id ?? null},${selectedModel?.name ?? product.model ?? null},${product.generation ?? null},${product.chip ?? null},${product.displaySize ?? null},${product.releaseYear ?? null},${JSON.stringify({ text: product.description })}::jsonb,${JSON.stringify(product.specifications)}::jsonb,${product.isNew},${product.status}::"ProductStatus",NOW())`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(${PRODUCT_ORDER_LOCK_KEY})::text AS locked`;
+        const nextOrderRows = await tx.$queryRaw<Array<{ nextOrder: number }>>`
+          SELECT COALESCE(MAX("manualOrder"),-1)::int+1 AS "nextOrder" FROM products
+        `;
+        await tx.$executeRaw`INSERT INTO products (id,name,slug,"manualOrder","brandId","productTypeId","globalProductTypeId","productLineId","categoryId","modelId",model,generation,chip,"displaySize","releaseYear",description,specifications,"isNew",status,"updatedAt") VALUES (${id},${product.name},${slug},${nextOrderRows[0]?.nextOrder ?? 0},${product.brandId},${product.productTypeId},${product.globalProductTypeId},${product.productLineId ?? null},${product.categoryId},${selectedModel?.id ?? null},${selectedModel?.name ?? product.model ?? null},${product.generation ?? null},${product.chip ?? null},${product.displaySize ?? null},${product.releaseYear ?? null},${JSON.stringify({ text: product.description })}::jsonb,${JSON.stringify(product.specifications)}::jsonb,${product.isNew},${product.status}::"ProductStatus",NOW())`;
         const savedVariantIds = await saveVariants(tx, id, product.variants);
         await syncDictionaryLinks(
           tx,
@@ -845,9 +857,27 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const session = await requireGlobalAdminMutation(request);
+    const scope = new URL(request.url).searchParams.get("scope") === "used" ? "used" : "new";
     const body = (await request.json()) as { id?: string; data?: unknown };
     if (!body.id || typeof body.id !== "string")
       return NextResponse.json({ error: "Не указан товар." }, { status: 400 });
+    if ((body as { action?: string }).action === "unpublish") {
+      await adminDb().$transaction(async (tx) => {
+        const current = await tx.$queryRaw<Array<{ id: string; status: string }>>`
+          SELECT id,status::text AS status FROM products WHERE id=${body.id}
+            AND ((${scope}='used' AND specifications @> '{"tradeIn":true}'::jsonb) OR (${scope}='new' AND NOT (specifications @> '{"tradeIn":true}'::jsonb)))
+          LIMIT 1 FOR UPDATE
+        `;
+        if (!current.length) throw new Error("NOT_FOUND");
+        if (current[0].status === "PUBLISHED") {
+          const before = await getProductAuditSnapshot(tx, body.id!);
+          await tx.$executeRaw`UPDATE products SET status='HIDDEN'::"ProductStatus", "updatedAt"=NOW() WHERE id=${body.id}`;
+          const after = await getProductAuditSnapshot(tx, body.id!);
+          await writeAuditLog(tx, session, { action: "product.updated", entityType: "product", entityId: body.id!, changes: productAuditChanges(before, after), metadata: { reason: "unpublished_from_admin" } });
+        }
+      });
+      return NextResponse.json({ ok: true, status: "HIDDEN" });
+    }
     const parsed = productSchema.safeParse(body.data);
     if (!parsed.success)
       return NextResponse.json(
@@ -855,13 +885,13 @@ export async function PATCH(request: Request) {
         { status: 400 },
       );
     const product = parsed.data;
+    if ((scope === "used") !== (product.specifications.tradeIn === true))
+      return NextResponse.json({ error: "Тип редактора не соответствует типу товара." }, { status: 400 });
     const db = adminDb();
     const productId = body.id;
     await db.$transaction(
       async (tx) => {
-        const exists = await tx.$queryRaw<
-          any[]
-        >`SELECT id FROM products WHERE id=${productId} LIMIT 1`;
+        const exists = await tx.$queryRaw<any[]>`SELECT id FROM products WHERE id=${productId} AND ((${scope}='used' AND specifications @> '{"tradeIn":true}'::jsonb) OR (${scope}='new' AND NOT (specifications @> '{"tradeIn":true}'::jsonb))) LIMIT 1`;
         if (!exists.length) throw new Error("NOT_FOUND");
         const current = await tx.$queryRaw<
           any[]
@@ -869,13 +899,12 @@ export async function PATCH(request: Request) {
         if (!current.length) throw new Error("NOT_FOUND");
         const before = await getProductAuditSnapshot(tx, productId);
         const inventoryBefore = await getProductInventorySnapshot(tx, productId);
-        const [brand, type, category, line] = await Promise.all([
+        const [brand, type, legacyType, category, line] = await Promise.all([
           tx.$queryRaw<
             any[]
           >`SELECT id FROM brands WHERE id=${product.brandId} AND "isActive"=TRUE`,
-          tx.$queryRaw<
-            any[]
-          >`SELECT pt.id FROM product_types pt JOIN legacy_product_type_mappings mapping ON mapping."legacyProductTypeId"=pt.id JOIN global_product_types g ON g.id=mapping."globalProductTypeId" JOIN global_product_type_brands link ON link."productTypeId"=g.id AND link."brandId"=${product.brandId} WHERE pt.id=${product.productTypeId} AND pt."isActive"=TRUE AND g."isActive"=TRUE AND pt."brandId"=${product.brandId}`,
+          tx.$queryRaw<any[]>`SELECT id FROM global_product_types WHERE id=${product.globalProductTypeId} AND "isActive"=TRUE`,
+          tx.$queryRaw<any[]>`SELECT pt.id FROM product_types pt JOIN legacy_product_type_mappings m ON m."legacyProductTypeId"=pt.id WHERE m."globalProductTypeId"=${product.globalProductTypeId} AND pt."brandId"=${product.brandId} AND pt."isActive"=TRUE ORDER BY pt.id LIMIT 1`,
           tx.$queryRaw<
             any[]
           >`SELECT id FROM categories WHERE id=${product.categoryId} AND "isActive"=TRUE`,
@@ -887,6 +916,7 @@ export async function PATCH(request: Request) {
         ]);
         if (!brand.length || !type.length || !category.length || !line.length)
           throw new Error("INVALID_REFERENCE");
+        product.productTypeId = product.productTypeId || legacyType[0]?.id || null;
         const currentModel = await tx.$queryRaw<
           any[]
         >`SELECT "modelId" FROM products WHERE id=${productId} LIMIT 1`;
@@ -898,9 +928,17 @@ export async function PATCH(request: Request) {
         const nameChanged = String(current[0].name) !== product.name;
         const nextSlug = nameChanged ? await uniqueSlug(tx, product.name, productId) : current[0].slug;
         if (nextSlug !== current[0].slug) await preserveSlugAlias(tx, String(current[0].slug), productId);
-        await tx.$executeRaw`UPDATE products SET name=${product.name},slug=${nextSlug},"brandId"=${product.brandId},"productTypeId"=${product.productTypeId},"productLineId"=${product.productLineId ?? null},"categoryId"=${product.categoryId},"modelId"=${selectedModel?.id ?? null},model=${selectedModel?.name ?? product.model ?? null},generation=${product.generation ?? null},chip=${product.chip ?? null},"displaySize"=${product.displaySize ?? null},"releaseYear"=${product.releaseYear ?? null},description=${JSON.stringify({ text: product.description })}::jsonb,specifications=${JSON.stringify(product.specifications)}::jsonb,"isNew"=${product.isNew},status=${product.status}::"ProductStatus","updatedAt"=NOW() WHERE id=${productId}`;
-        await saveVariants(tx, productId, product.variants);
-        await syncDictionaryLinks(tx, productId, product.variants, product);
+        await tx.$executeRaw`UPDATE products SET name=${product.name},slug=${nextSlug},"brandId"=${product.brandId},"productTypeId"=${product.productTypeId},"globalProductTypeId"=${product.globalProductTypeId},"productLineId"=${product.productLineId ?? null},"categoryId"=${product.categoryId},"modelId"=${selectedModel?.id ?? null},model=${selectedModel?.name ?? product.model ?? null},generation=${product.generation ?? null},chip=${product.chip ?? null},"displaySize"=${product.displaySize ?? null},"releaseYear"=${product.releaseYear ?? null},description=${JSON.stringify({ text: product.description })}::jsonb,specifications=${JSON.stringify(product.specifications)}::jsonb,"isNew"=${product.isNew},status=${product.status}::"ProductStatus","updatedAt"=NOW() WHERE id=${productId}`;
+        const savedVariantIds = await saveVariants(tx, productId, product.variants);
+        await syncDictionaryLinks(
+          tx,
+          productId,
+          product.variants.map((item, index) => ({
+            ...item,
+            id: item.id ?? savedVariantIds[index],
+          })),
+          product,
+        );
         await saveImages(tx, productId, product.images);
         await syncRelatedProducts(tx, productId, product.relatedProductIds);
         const after = await getProductAuditSnapshot(tx, productId);
@@ -916,5 +954,53 @@ export async function PATCH(request: Request) {
       { error: failure.message },
       { status: failure.status },
     );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const session = await requireGlobalAdminMutation(request);
+    const requestUrl = new URL(request.url);
+    const scope = requestUrl.searchParams.get("scope") === "used" ? "used" : "new";
+    let productId = requestUrl.searchParams.get("id")?.trim() ?? "";
+    if (!productId) {
+      const body = (await request.json().catch(() => ({}))) as { id?: unknown };
+      productId = typeof body.id === "string" ? body.id.trim() : "";
+    }
+    if (!productId) return NextResponse.json({ error: "Не указан товар." }, { status: 400 });
+
+    await adminDb().$transaction(async (tx) => {
+      const product = await tx.$queryRaw<Array<{ id: string; name: string }>>`
+        SELECT id,name FROM products WHERE id=${productId}
+          AND ((${scope}='used' AND specifications @> '{"tradeIn":true}'::jsonb) OR (${scope}='new' AND NOT (specifications @> '{"tradeIn":true}'::jsonb)))
+        LIMIT 1
+      `;
+      if (!product.length) throw new Error("NOT_FOUND");
+      await tx.$executeRaw`
+        DELETE FROM order_items
+        WHERE "variantId" IN (SELECT id FROM product_variants WHERE "productId"=${productId})
+      `;
+
+      await tx.$executeRaw`DELETE FROM best_offers WHERE "productId"=${productId}`;
+      await tx.$executeRaw`DELETE FROM popular_products WHERE "productId"=${productId}`;
+      const relatedSchema = await tx.$queryRaw<Array<{ relation: string | null }>>`
+        SELECT to_regclass('public.product_related_products')::text AS relation
+      `;
+      if (relatedSchema[0]?.relation) {
+        await tx.$executeRaw`DELETE FROM product_related_products WHERE "productId"=${productId} OR "relatedProductId"=${productId}`;
+      }
+      await tx.$executeRaw`DELETE FROM products WHERE id=${productId}`;
+      await writeAuditLog(tx, session, {
+        action: "product.deleted",
+        entityType: "product",
+        entityId: productId,
+        changes: { deleted: { old: { id: productId, name: product[0].name }, new: null } },
+      });
+    }, { maxWait: 10000, timeout: 30000 });
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const failure = mutationFailure(error, "delete");
+    return NextResponse.json({ error: failure.message }, { status: failure.status });
   }
 }

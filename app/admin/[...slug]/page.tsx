@@ -1,4 +1,3 @@
-import AdminCityInventory from "@/components/AdminCityInventory";
 import AdminEmployeesBackend from "@/components/AdminEmployeesBackend";
 import AdminProductsBackend from "@/components/AdminProductsBackend";
 import AdminRequestsBackend from "@/components/AdminRequestsBackend";
@@ -14,6 +13,7 @@ import AdminCatalogMenuBanners from "@/components/AdminCatalogMenuBanners";
 import AdminCatalogMenu from "@/components/AdminCatalogMenu";
 import AdminProductGroupsBackend from "@/components/AdminProductGroupsBackend";
 import AdminAuditLogBackend from "@/components/AdminAuditLogBackend";
+import AdminPromoCodesBackend from "@/components/AdminPromoCodesBackend";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 
@@ -30,12 +30,14 @@ export default async function AdminSection({ params }: { params: { slug: string[
       return <AdminRequestsBackend />;
     case "products":
       return <AdminProductsBackend />;
+    case "used-products":
+      return <AdminProductsBackend mode="tradeIn" />;
     case "employees":
       return <AdminEmployeesBackend />;
     case "audit-log":
       return <AdminAuditLogBackend />;
     case "inventory":
-      return <AdminCityInventory />;
+      redirect("/admin/products");
     case "categories":
       return <AdminTaxonomyBackend type="categories" />;
     case "brands":
@@ -64,6 +66,8 @@ export default async function AdminSection({ params }: { params: { slug: string[
       return <AdminDictionaries initialCode="productType" />;
     case "dictionaries":
       redirect("/admin/dictionaries");
+    case "promo-codes":
+      return <AdminPromoCodesBackend />;
     default:
       return <section className="admin-content"><header className="admin-page-heading"><div><h1>Раздел пока недоступен</h1><p>{path}</p></div></header><p>Для этого раздела ещё не подключено серверное хранилище. Изменения не принимаются.</p></section>;
   }

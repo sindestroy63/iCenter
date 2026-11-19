@@ -35,7 +35,7 @@ export async function GET(request: Request) {
         db.$queryRaw<any[]>`SELECT id,name,slug FROM brands WHERE "isActive"=TRUE ORDER BY name`,
         db.$queryRaw<any[]>`SELECT id,name,"canonicalKey" FROM global_product_types WHERE "isActive"=TRUE ORDER BY "sortOrder",name`,
         db.$queryRaw<any[]>`SELECT m.id,m.name,m."brandId",m."globalProductTypeId" FROM product_models m JOIN brands b ON b.id=m."brandId" AND b."isActive"=TRUE JOIN global_product_types t ON t.id=m."globalProductTypeId" AND t."isActive"=TRUE WHERE m."isActive"=TRUE ORDER BY m.name`,
-        db.$queryRaw<any[]>`SELECT p.id,p.name,p.slug,b.name AS "brandName",pt.name AS "typeName" FROM products p JOIN brands b ON b.id=p."brandId" JOIN product_types pt ON pt.id=p."productTypeId" WHERE p.status='PUBLISHED'::"ProductStatus" AND (${q}::text='' OR p.name ILIKE ${pattern} OR p.slug ILIKE ${pattern} OR EXISTS (SELECT 1 FROM product_variants search_v WHERE search_v."productId"=p.id AND search_v.sku ILIKE ${pattern})) ORDER BY p.name LIMIT 200`,
+        db.$queryRaw<any[]>`SELECT p.id,p.name,p.slug,b.name AS "brandName",pt.name AS "typeName" FROM products p JOIN brands b ON b.id=p."brandId" JOIN global_product_types pt ON pt.id=p."globalProductTypeId" WHERE p.status='PUBLISHED'::"ProductStatus" AND (${q}::text='' OR p.name ILIKE ${pattern} OR p.slug ILIKE ${pattern} OR EXISTS (SELECT 1 FROM product_variants search_v WHERE search_v."productId"=p.id AND search_v.sku ILIKE ${pattern})) ORDER BY p.name LIMIT 200`,
         db.$queryRaw<any[]>`SELECT id,slug,name FROM cities WHERE "isActive"=TRUE ORDER BY "sortOrder",name`,
       ]);
       const cityId = cities.find((item) => item.slug === requestedCity)?.id ?? cities[0]?.id ?? null;

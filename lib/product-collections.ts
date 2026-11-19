@@ -41,14 +41,14 @@ export async function loadAdminCollection(db: PrismaClient, collection: ProductC
         SELECT entry.id,entry."productId",entry."variantId",entry."sortOrder",entry."isActive",
           ${collection === "best_offers" ? Prisma.sql`entry.title,entry.description,` : Prisma.sql`NULL::text AS title,NULL::text AS description,`}
           p.name AS "productName",p.slug,b.name AS "brandName"
-        FROM ${table} entry JOIN products p ON p.id=entry."productId"
+        FROM ${table} entry JOIN products p ON p.id=entry."productId" AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb)
         LEFT JOIN brands b ON b.id=p."brandId"
         ORDER BY entry."sortOrder",entry.id
       `)
     : await db.$queryRaw<any[]>(Prisma.sql`
         SELECT entry.id,entry."productId",NULL::text AS "variantId",entry."sortOrder",entry."isActive",
           entry.title,entry.description,p.name AS "productName",p.slug,b.name AS "brandName"
-        FROM best_offers entry JOIN products p ON p.id=entry."productId"
+        FROM best_offers entry JOIN products p ON p.id=entry."productId" AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb)
         LEFT JOIN brands b ON b.id=p."brandId"
         ORDER BY entry."sortOrder",entry.id
       `);
@@ -59,7 +59,7 @@ export async function loadAdminCollection(db: PrismaClient, collection: ProductC
       i.price::text AS price,i.availability::text AS availability,image."storagePath"
     FROM products p
     JOIN brands b ON b.id=p."brandId" AND b."isActive"=TRUE
-    JOIN product_types pt ON pt.id=p."productTypeId" AND pt."isActive"=TRUE
+    JOIN global_product_types pt ON pt.id=p."globalProductTypeId" AND pt."isActive"=TRUE
     JOIN categories c ON c.id=p."categoryId" AND c."isActive"=TRUE
     JOIN product_variants v ON v."productId"=p.id AND v."isActive"=TRUE
     JOIN inventory i ON i."variantId"=v.id AND i."cityId"=${city.id} AND i."isActive"=TRUE
@@ -75,7 +75,7 @@ export async function loadAdminCollection(db: PrismaClient, collection: ProductC
         WHERE pgi."productId"=p.id AND m."mimeType" LIKE 'image/%'
       ) source ORDER BY source.priority,source."sortOrder" LIMIT 1
     ) image ON TRUE
-    WHERE p.status='PUBLISHED'::"ProductStatus"
+    WHERE p.status='PUBLISHED'::"ProductStatus" AND NOT (p.specifications @> '{"tradeIn":true}'::jsonb)
     ORDER BY b.name,p.name,v.storage,co.name,v."simType",v.sku
   ` : [];
 

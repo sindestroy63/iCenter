@@ -1,16 +1,34 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
+import { buildPublicVariantAttributeLabels, buildPublicVariantAttributes } from "@/lib/catalog-variant-attributes";
 import { z } from "zod";
 import { apiError, cityValidationError, findCity, imageUrl, invalidInputError, publicAvailability, readOnly, readRequestUrl, validateCity } from "@/lib/catalog-api";
 import { parseJson } from "@/lib/catalog-dto";
-import { expandCatalogSearchQuery, normalizeCatalogSearchQuery } from "@/lib/catalog-search";
+import { catalogSearchModelTokenGroups, catalogSearchTokenGroups, normalizeCatalogSearchQuery } from "@/lib/catalog-search";
 import { TRADE_IN_CATEGORY_SLUG, tradeInProductDetails } from "@/lib/trade-in-product";
-import { CATALOG_MENU_SETTING_KEY, createDefaultCatalogMenu, parseCatalogMenu, type CatalogMenuRule, type MenuTaxonomy } from "@/lib/catalog-menu";
+import { CATALOG_MENU_SETTING_KEY, parseCatalogMenu, resolveCatalogMenu, type CatalogMenuRule, type MenuTaxonomy } from "@/lib/catalog-menu";
 import { groupRuleWhere, groupSchema, groupVariantWhere } from "@/lib/product-groups";
+import { calculateOldPrice } from "@/lib/product-price";
 
 export const dynamic = "force-dynamic";
 
 const querySchema = z.object({ q: z.string().trim().max(100).optional(), brand: z.string().trim().max(160).optional(), category: z.string().trim().max(160).optional(), type: z.string().trim().max(160).optional(), modelId: z.string().trim().max(160).optional(), groupId: z.string().trim().max(160).optional(), scopeBrand: z.string().trim().max(160).optional(), scopeCategory: z.string().trim().max(160).optional(), scopeType: z.string().trim().max(160).optional(), menuItem: z.string().trim().max(80).optional(), color: z.string().trim().max(160).optional(), memory: z.string().trim().max(100).optional(), ram: z.string().trim().max(100).optional(), sim: z.string().trim().max(100).optional(), connectivity: z.string().trim().max(160).optional(), limit: z.coerce.number().int().min(1).max(100).default(24), offset: z.coerce.number().int().min(0).max(10000).default(0) });
+
+const attributeCodePattern = /^[a-zA-Z0-9_-]{1,80}$/;
+
+function parseAttributeFilters(searchParams: URLSearchParams) {
+  const filters = new Map<string, string[]>();
+  for (const entry of searchParams.getAll("attribute")) {
+    const separator = entry.indexOf(":");
+    const code = separator > 0 ? entry.slice(0, separator).trim() : "";
+    const value = separator > 0 ? entry.slice(separator + 1).trim().replace(/\s+/g, " ") : "";
+    if (!attributeCodePattern.test(code) || !value || value.length > 200) return null;
+    const values = filters.get(code) ?? [];
+    if (!values.some((current) => current.toLocaleLowerCase("ru-RU") === value.toLocaleLowerCase("ru-RU"))) values.push(value);
+    filters.set(code, values);
+  }
+  return Array.from(filters.entries()).map(([code, values]) => ({ code, values }));
+}
 
 export async function GET(request: Request) {
   const url = readRequestUrl(request);
@@ -19,84 +37,129 @@ export async function GET(request: Request) {
   const parsed = querySchema.safeParse(Object.fromEntries(url.searchParams.entries()));
   if (!parsed.success) return invalidInputError();
   const filters = parsed.data;
+  const attributeFilters = parseAttributeFilters(url.searchParams);
+  if (!attributeFilters) return invalidInputError();
 
   try {
     const data = await readOnly(async (tx) => {
       const city = await findCity(tx, citySlug);
       if (!city) return null;
       let menuCondition = Prisma.sql`TRUE`;
+      let tradeInListing = filters.category === TRADE_IN_CATEGORY_SLUG || filters.scopeCategory === TRADE_IN_CATEGORY_SLUG;
       let groupCondition = Prisma.sql`TRUE`;
       let groupVariantCondition = Prisma.sql`TRUE`;
+      const menuGroupConditions: Prisma.Sql[] = [];
+      const menuGroupVariantConditions: Prisma.Sql[] = [];
       const groupSchemaState = filters.groupId || filters.menuItem ? await groupSchema(tx) : null;
       const includeGroupVariants = groupSchemaState?.variants === true;
       if (filters.groupId) {
         const group = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM catalog_groups WHERE id=${filters.groupId} AND isactive=TRUE LIMIT 1`;
-        groupCondition = group.length ? groupRuleWhere(filters.groupId, includeGroupVariants) : Prisma.sql`FALSE`;
-        groupVariantCondition = group.length ? groupVariantWhere(filters.groupId, includeGroupVariants) : Prisma.sql`FALSE`;
+        menuGroupConditions.push(group.length ? groupRuleWhere(filters.groupId, includeGroupVariants) : Prisma.sql`FALSE`);
+        menuGroupVariantConditions.push(group.length ? groupVariantWhere(filters.groupId, includeGroupVariants) : Prisma.sql`FALSE`);
       }
       if (filters.menuItem) {
         const settings = await tx.$queryRaw<Array<{ key: string; value: unknown }>>`SELECT key,value FROM settings WHERE key IN ('catalog.megaMenu','catalog.megaMenuBanners')`;
-        const [brands, types, categories, models] = await Promise.all([
+        const [brands, types, categories, models, legacyMappings] = await Promise.all([
           tx.$queryRaw<MenuTaxonomy["brands"]>`SELECT id,slug,name FROM brands WHERE "isActive"=TRUE`,
-          tx.$queryRaw<MenuTaxonomy["types"]>`SELECT pt.id,pt.slug,pt.name,pt."brandId",b.slug AS "brandSlug",mapping."globalProductTypeId" FROM product_types pt JOIN brands b ON b.id=pt."brandId" JOIN legacy_product_type_mappings mapping ON mapping."legacyProductTypeId"=pt.id WHERE pt."isActive"=TRUE AND b."isActive"=TRUE`,
+          tx.$queryRaw<MenuTaxonomy["types"]>`SELECT id,"canonicalKey" AS slug,name FROM global_product_types WHERE "isActive"=TRUE`,
           tx.$queryRaw<MenuTaxonomy["categories"]>`SELECT id,slug,name,"parentId" FROM categories WHERE "isActive"=TRUE`,
           tx.$queryRaw<MenuTaxonomy["models"]>`SELECT id,name,"brandId","globalProductTypeId" FROM product_models WHERE "isActive"=TRUE`,
+          tx.$queryRaw<Array<{ legacyProductTypeId: string; globalProductTypeId: string }>>`SELECT "legacyProductTypeId","globalProductTypeId" FROM legacy_product_type_mappings`,
         ]);
         const taxonomy: MenuTaxonomy = { brands, types, categories, models };
         const saved = settings.find((entry) => entry.key === CATALOG_MENU_SETTING_KEY)?.value;
         const legacy = settings.find((entry) => entry.key === "catalog.megaMenuBanners")?.value;
-        const menu = parseCatalogMenu(saved) ?? createDefaultCatalogMenu(taxonomy, legacy);
+        const menu = resolveCatalogMenu(parseCatalogMenu(saved), taxonomy, legacy, legacyMappings);
         const item = menu.items.find((entry) => entry.id === filters.menuItem && entry.visible);
         let rules: CatalogMenuRule[] | null = null;
         if (item?.action?.type === "group") {
-          groupCondition = groupRuleWhere(item.action.groupId, includeGroupVariants);
-          groupVariantCondition = groupVariantWhere(item.action.groupId, includeGroupVariants);
+          const group = includeGroupVariants
+            ? await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM catalog_groups WHERE id=${item.action.groupId} AND isactive=TRUE LIMIT 1`
+            : [];
+          if (group.length) {
+            menuGroupConditions.push(Prisma.sql`EXISTS (
+              SELECT 1 FROM catalog_group_variants menu_gv
+              JOIN product_variants menu_gv_variant ON menu_gv_variant.id=menu_gv."variantId"
+              WHERE menu_gv."groupId"=${item.action.groupId} AND menu_gv_variant."productId"=p0.id
+            )`);
+            menuGroupVariantConditions.push(Prisma.sql`EXISTS (
+              SELECT 1 FROM catalog_group_variants menu_gv
+              WHERE menu_gv."groupId"=${item.action.groupId} AND menu_gv."variantId"=pv.id
+            )`);
+          } else {
+            menuCondition = Prisma.sql`FALSE`;
+          }
+        } else if (item?.action?.type === "filters") {
+          rules = item.action.rules;
+        } else if (item?.action?.type === "category") {
+          if (item.id === "accessories-other") {
+            menuCondition = Prisma.sql`c0.id = ${item.action.categoryId}`;
+          } else {
+            rules = [item.action.categoryId === TRADE_IN_CATEGORY_SLUG ? { field: "tradeIn", value: true } : { field: "category", value: item.action.categoryId }];
+          }
+        } else {
+          menuCondition = Prisma.sql`FALSE`;
         }
-        else if (item?.action?.type === "filters") rules = item.action.rules;
-        else if (item?.action?.type === "category") rules = item.action.categoryId === TRADE_IN_CATEGORY_SLUG ? [{ field: "tradeIn", value: true }] : [{ field: "category", value: item.action.categoryId }];
-        if (!rules && item?.action?.type !== "group") menuCondition = Prisma.sql`FALSE`;
-        else if (rules) {
+        if (menuGroupConditions.length) groupCondition = Prisma.join(menuGroupConditions.map((condition) => Prisma.sql`(${condition})`), " AND ");
+        if (menuGroupVariantConditions.length) groupVariantCondition = Prisma.join(menuGroupVariantConditions.map((condition) => Prisma.sql`(${condition})`), " AND ");
+        if (rules) {
+          if (rules.some((rule) => rule.field === "tradeIn")) tradeInListing = true;
           const conditions = rules.map((rule) => {
             if (rule.field === "brand") return Prisma.sql`b0.id = ${String(rule.value)}`;
             if (rule.field === "type") return Prisma.sql`pt0.id = ${String(rule.value)}`;
-            if (rule.field === "model") return Prisma.sql`EXISTS (SELECT 1 FROM product_models menu_model JOIN legacy_product_type_mappings menu_mapping ON menu_mapping."globalProductTypeId"=menu_model."globalProductTypeId" WHERE menu_model.id=${String(rule.value)} AND menu_model."brandId"=p0."brandId" AND menu_mapping."legacyProductTypeId"=p0."productTypeId")`;
-            if (rule.field === "category") return Prisma.sql`(c0.id = ${String(rule.value)} OR c0."parentId" = ${String(rule.value)})`;
+            if (rule.field === "model") return Prisma.sql`p0."modelId" = ${String(rule.value)}`;
+            if (rule.field === "category") return Prisma.sql`c0.id IN (WITH RECURSIVE menu_categories(id) AS (SELECT id FROM categories WHERE id=${String(rule.value)} UNION ALL SELECT child.id FROM categories child JOIN menu_categories parent ON child."parentId"=parent.id WHERE child."isActive"=TRUE) SELECT id FROM menu_categories)`;
             return Prisma.sql`p0.specifications @> '{"tradeIn":true}'::jsonb AND EXISTS (SELECT 1 FROM product_variants menu_used_v JOIN inventory menu_used_i ON menu_used_i."variantId"=menu_used_v.id WHERE menu_used_v."productId"=p0.id AND menu_used_v."isActive"=TRUE AND menu_used_i."cityId"=${city.id} AND menu_used_i."isActive"=TRUE AND menu_used_i.availability::text='IN_STOCK')`;
           });
           menuCondition = conditions.length ? Prisma.join(conditions, " AND ") : Prisma.sql`FALSE`;
         }
       }
       const normalizedQuery = normalizeCatalogSearchQuery(filters.q ?? "");
-      const searchPatterns = expandCatalogSearchQuery(normalizedQuery).map((term) => `%${term.replace(/[\\%_]/g, "\\$&")}%`);
-      const searchCondition = searchPatterns.length ? Prisma.join(searchPatterns.map((pattern) => Prisma.sql`(
-        p0.name ILIKE ${pattern} OR b0.name ILIKE ${pattern}
-        OR pt0.name ILIKE ${pattern} OR c0.name ILIKE ${pattern}
-        OR EXISTS (
-          SELECT 1 FROM product_variants sv0
-          LEFT JOIN colors sc0 ON sc0.id = sv0."colorId"
-          WHERE sv0."productId" = p0.id AND (
-            sv0.sku ILIKE ${pattern} OR sv0.label ILIKE ${pattern}
-            OR COALESCE(sv0.storage, '') ILIKE ${pattern} OR COALESCE(sv0.ram, '') ILIKE ${pattern}
-            OR COALESCE(sv0."simType", '') ILIKE ${pattern} OR COALESCE(sv0.connectivity, '') ILIKE ${pattern}
-            OR COALESCE(sc0.name, '') ILIKE ${pattern} OR COALESCE(to_jsonb(sc0)->>'nameRu', '') ILIKE ${pattern}
-            OR EXISTS (
-              SELECT 1 FROM product_variant_attribute_values av0
-              JOIN attribute_options ao0 ON ao0.id=av0."optionId"
-              LEFT JOIN attribute_option_aliases aa0 ON aa0."optionId"=ao0.id
-              WHERE av0."variantId"=sv0.id AND (ao0.label ILIKE ${pattern} OR aa0."aliasLabel" ILIKE ${pattern})
-            )
-          )
-        )
-      )`), " OR ") : Prisma.sql`TRUE`;
+      const searchTokenGroups = catalogSearchTokenGroups(normalizedQuery);
+      const modelSearchTokenGroups = catalogSearchModelTokenGroups(normalizedQuery);
+      const searchCondition = searchTokenGroups.length ? Prisma.sql`EXISTS (
+        SELECT 1 FROM product_variants sv0
+        JOIN inventory si0 ON si0."variantId"=sv0.id AND si0."cityId"=${city.id} AND si0."isActive"=TRUE
+        LEFT JOIN colors sc0 ON sc0.id=sv0."colorId"
+        WHERE sv0."productId"=p0.id AND sv0."isActive"=TRUE
+          AND (${variantSearchCondition(searchTokenGroups, {
+            product: Prisma.sql`p0`, brand: Prisma.sql`b0`, type: Prisma.sql`pt0`, category: Prisma.sql`c0`,
+            variant: Prisma.sql`sv0`, color: Prisma.sql`sc0`,
+          })})
+      )` : Prisma.sql`TRUE`;
       const exactSearch = `%${normalizedQuery}%`;
+      const dynamicAttributeCondition = attributeFilters.length
+        ? Prisma.join(attributeFilters.map(({ code, values }) => Prisma.sql`(
+            lower(regexp_replace(btrim(COALESCE(fv.attributes ->> ${code}, '')), '[[:space:]]+', ' ', 'g')) IN (${Prisma.join(values.map((value) => Prisma.sql`lower(${value})`))})
+            OR EXISTS (
+              SELECT 1 FROM product_variant_attribute_values dynamic_av
+              JOIN attribute_definitions dynamic_ad ON dynamic_ad.id=dynamic_av."definitionId" AND dynamic_ad.code=${code}
+              JOIN attribute_options dynamic_ao ON dynamic_ao.id=dynamic_av."optionId"
+              WHERE dynamic_av."variantId"=fv.id
+                AND lower(regexp_replace(btrim(dynamic_ao.label), '[[:space:]]+', ' ', 'g')) IN (${Prisma.join(values.map((value) => Prisma.sql`lower(${value})`))})
+            )
+          )`), " AND ")
+        : Prisma.sql`TRUE`;
       const rows = await tx.$queryRaw<ProductRow[]>`
         WITH page AS (
-          SELECT p0.id
+          SELECT p0.id,
+            CASE
+              WHEN ${normalizedQuery} <> '' AND regexp_replace(lower(p0.name), '[[:space:]]+', ' ', 'g') = ${normalizedQuery} THEN 0
+              WHEN ${normalizedQuery} <> '' AND EXISTS (
+                SELECT 1 FROM product_variants exact_variant
+                WHERE exact_variant."productId"=p0.id AND exact_variant."isActive"=TRUE
+                  AND (lower(exact_variant.sku)=${normalizedQuery} OR lower(exact_variant.label)=${normalizedQuery})
+              ) THEN 1
+              WHEN ${normalizedQuery} <> '' AND lower(p0.name) LIKE ${`${normalizedQuery}%`} THEN 2
+              WHEN ${normalizedQuery} <> '' AND lower(p0.name) LIKE ${exactSearch} THEN 3
+              ELSE 4
+            END AS "searchRank"
           FROM products p0
           JOIN brands b0 ON b0.id = p0."brandId" AND b0."isActive" = TRUE
-          JOIN product_types pt0 ON pt0.id = p0."productTypeId" AND pt0."isActive" = TRUE
+          JOIN global_product_types pt0 ON pt0.id = p0."globalProductTypeId" AND pt0."isActive" = TRUE
           JOIN categories c0 ON c0.id = p0."categoryId" AND c0."isActive" = TRUE
           WHERE p0.status = 'PUBLISHED'::"ProductStatus"
+            AND (${tradeInListing} OR NOT (p0.specifications @> '{"tradeIn":true}'::jsonb))
             AND EXISTS (SELECT 1 FROM product_variants v0 JOIN inventory i0 ON i0."variantId" = v0.id WHERE v0."productId" = p0.id AND v0."isActive" = TRUE AND i0."cityId" = ${city.id} AND i0."isActive" = TRUE)
             AND (${menuCondition})
             AND (${groupCondition})
@@ -128,13 +191,13 @@ export async function GET(request: Request) {
                 AND scoped_used_inventory."cityId"=${city.id} AND scoped_used_inventory."isActive"=TRUE
                 AND scoped_used_inventory.availability::text='IN_STOCK'
             ))
-            AND (${filters.type ?? null}::text IS NULL OR p0."productTypeId"::text = ${filters.type ?? null} OR pt0.slug = ${filters.type ?? null}
-              OR (${filters.type ?? null} = 'smartphone' AND lower(pt0.slug) IN ('galaxy','iphone'))
-              OR (${filters.type ?? null} = 'tablet' AND lower(pt0.slug) = 'ipad')
-              OR (${filters.type ?? null} = 'console' AND lower(pt0.slug) = 'playstation')
-              OR (${filters.type ?? null} = 'vacuum' AND lower(pt0.slug) = 'vacuum-cleaner'))
-            AND (${filters.modelId ?? null}::text IS NULL OR EXISTS (SELECT 1 FROM product_models filter_model JOIN legacy_product_type_mappings filter_mapping ON filter_mapping."globalProductTypeId"=filter_model."globalProductTypeId" WHERE filter_model.id=${filters.modelId ?? null} AND filter_model."brandId"=p0."brandId" AND filter_mapping."legacyProductTypeId"=p0."productTypeId" AND p0."modelId"=filter_model.id))
-            AND (${filters.scopeType ?? null}::text IS NULL OR p0."productTypeId"::text = ${filters.scopeType ?? null} OR pt0.slug = ${filters.scopeType ?? null})
+            AND (${filters.type ?? null}::text IS NULL OR p0."globalProductTypeId"::text = ${filters.type ?? null} OR pt0."canonicalKey" = ${filters.type ?? null} OR pt0.name = ${filters.type ?? null}
+              OR (${filters.type ?? null} = 'smartphone' AND lower(pt0."canonicalKey") = 'product_type:smartphone')
+              OR (${filters.type ?? null} = 'tablet' AND lower(pt0."canonicalKey") = 'product_type:tablet')
+              OR (${filters.type ?? null} = 'console' AND lower(pt0."canonicalKey") = 'product_type:console')
+              OR (${filters.type ?? null} = 'vacuum' AND lower(pt0."canonicalKey") = 'product_type:vacuum'))
+            AND (${filters.modelId ?? null}::text IS NULL OR EXISTS (SELECT 1 FROM product_models filter_model WHERE filter_model.id=${filters.modelId ?? null} AND filter_model."brandId"=p0."brandId" AND filter_model."globalProductTypeId"=p0."globalProductTypeId" AND p0."modelId"=filter_model.id))
+            AND (${filters.scopeType ?? null}::text IS NULL OR p0."globalProductTypeId"::text = ${filters.scopeType ?? null} OR pt0."canonicalKey" = ${filters.scopeType ?? null} OR pt0.name = ${filters.scopeType ?? null})
             AND EXISTS (
               SELECT 1 FROM product_variants fv
               JOIN inventory fi ON fi."variantId" = fv.id AND fi."cityId" = ${city.id} AND fi."isActive" = TRUE
@@ -157,20 +220,17 @@ export async function GET(request: Request) {
                   WHERE sav."variantId"=fv.id AND (lower(sao.label)=lower(${filters.sim ?? null}) OR lower(saa."aliasLabel")=lower(${filters.sim ?? null}))
                 ))
                 AND (${filters.connectivity ?? null}::text IS NULL OR lower(fv.connectivity) = lower(${filters.connectivity ?? null}))
+                AND (${dynamicAttributeCondition})
             )
             AND (${searchCondition})
-          ORDER BY CASE
-            WHEN ${normalizedQuery} <> '' AND regexp_replace(lower(p0.name), '[[:space:]]+', ' ', 'g') = ${normalizedQuery} THEN 0
-            WHEN ${normalizedQuery} <> '' AND lower(p0.name) LIKE ${`${normalizedQuery}%`} THEN 1
-            WHEN ${normalizedQuery} <> '' AND lower(p0.name) LIKE ${exactSearch} THEN 2
-            ELSE 3 END,
-            p0."isNew" DESC, p0.name, p0.id
+            AND (${modelSearchTokenGroups.length ? productIdentitySearchCondition(modelSearchTokenGroups, Prisma.sql`p0`, Prisma.sql`b0`) : Prisma.sql`TRUE`})
+          ORDER BY "searchRank", p0."manualOrder", p0."isNew" DESC, p0.name, p0.id
           LIMIT ${filters.limit} OFFSET ${filters.offset}
         )
         SELECT p.id, p.slug, p.name, p.model, p.generation, p.chip, p."displaySize", p."releaseYear",
                p.description, p.specifications, p."isNew",
                b.id AS "brandId", b.name AS "brandName", b.slug AS "brandSlug",
-               pt.id AS "typeId", pt.name AS "typeName", pt.slug AS "typeSlug", pt."variantAttributes" AS "typeAttributes",
+               pt.id AS "typeId", pt.name AS "typeName", pt."canonicalKey" AS "typeSlug", NULL::jsonb AS "typeAttributes",
                c.id AS "categoryId", c.name AS "categoryName", c.slug AS "categorySlug", c."parentId",
                pv.id AS "variantId", pv.sku, pv.label AS "variantLabel", pv.storage, pv.ram, pv."simType", pv.connectivity, pv.size, pv.material, pv.attributes AS "variantAttributes",
                color.id AS "colorId", color.name AS "colorName", to_jsonb(color)->>'nameRu' AS "colorNameRu", color.slug AS "colorSlug", color."hexPrimary", color."hexSecondary",
@@ -179,7 +239,7 @@ export async function GET(request: Request) {
         FROM page pg
         JOIN products p ON p.id = pg.id
         JOIN brands b ON b.id = p."brandId" AND b."isActive" = TRUE
-        JOIN product_types pt ON pt.id = p."productTypeId" AND pt."isActive" = TRUE
+        JOIN global_product_types pt ON pt.id = p."globalProductTypeId" AND pt."isActive" = TRUE
         JOIN categories c ON c.id = p."categoryId" AND c."isActive" = TRUE
         JOIN product_variants pv ON pv."productId" = p.id AND pv."isActive" = TRUE AND (${groupVariantCondition})
         JOIN inventory inv ON inv."variantId" = pv.id AND inv."cityId" = ${city.id} AND inv."isActive" = TRUE
@@ -196,10 +256,14 @@ export async function GET(request: Request) {
           WHERE cg."productId" = p.id
         ) gallery ON TRUE
         WHERE p.status = 'PUBLISHED'::"ProductStatus"
-        ORDER BY p."isNew" DESC, p.name, pv.sku, gallery."sortOrder"
+          AND (${searchTokenGroups.length ? variantSearchCondition(searchTokenGroups, {
+            product: Prisma.sql`p`, brand: Prisma.sql`b`, type: Prisma.sql`pt`, category: Prisma.sql`c`,
+            variant: Prisma.sql`pv`, color: Prisma.sql`color`,
+          }) : Prisma.sql`TRUE`})
+        ORDER BY pg."searchRank", p."manualOrder", p."isNew" DESC, p.name, pv.sku, gallery."sortOrder"
       `;
       const dictionaryRows = rows.length ? await tx.$queryRaw<VariantDictionaryRow[]>`
-        SELECT pav."variantId", d.code, o.label
+        SELECT pav."variantId", d.code, d.name, o.label
         FROM product_variant_attribute_values pav
         JOIN attribute_definitions d ON d.id=pav."definitionId"
         JOIN attribute_options o ON o.id=pav."optionId"
@@ -224,10 +288,45 @@ type ProductRow = {
   imageId: string | null; imageOrder: number | null; imageColorId: string | null; imagePath: string | null; imageMimeType: string | null; imageAlt: string | null;
 };
 
-type VariantDictionaryRow = { variantId: string; code: string; label: string };
+type VariantDictionaryRow = { variantId: string; code: string; label: string; name: string };
+
+type SearchAliases = { product: Prisma.Sql; brand: Prisma.Sql; type: Prisma.Sql; category: Prisma.Sql; variant: Prisma.Sql; color: Prisma.Sql };
+
+function variantSearchCondition(tokenGroups: string[][], aliases: SearchAliases) {
+  const { product, brand, type, category, variant, color } = aliases;
+  return Prisma.join(tokenGroups.map((alternatives) => Prisma.sql`(
+    ${Prisma.join(alternatives.map((term) => {
+      const pattern = `%${term.replace(/[\\%_]/g, "\\$&")}%`;
+      return Prisma.sql`
+        ${product}.name ILIKE ${pattern} OR COALESCE(${product}.model, '') ILIKE ${pattern}
+        OR COALESCE(${product}.generation, '') ILIKE ${pattern} OR COALESCE(${product}.chip, '') ILIKE ${pattern}
+        OR COALESCE(${product}."displaySize", '') ILIKE ${pattern}
+        OR ${brand}.name ILIKE ${pattern} OR ${brand}.slug ILIKE ${pattern}
+        OR ${type}.name ILIKE ${pattern} OR ${category}.name ILIKE ${pattern}
+        OR ${variant}.sku ILIKE ${pattern} OR ${variant}.label ILIKE ${pattern}
+        OR COALESCE(${variant}.storage, '') ILIKE ${pattern} OR COALESCE(${variant}.ram, '') ILIKE ${pattern}
+        OR COALESCE(${variant}."simType", '') ILIKE ${pattern} OR COALESCE(${variant}.connectivity, '') ILIKE ${pattern}
+        OR COALESCE(${variant}.size, '') ILIKE ${pattern} OR COALESCE(${variant}.material, '') ILIKE ${pattern}
+        OR COALESCE(${variant}.attributes::text, '') ILIKE ${pattern}
+        OR COALESCE(${color}.name, '') ILIKE ${pattern} OR COALESCE(to_jsonb(${color})->>'nameRu', '') ILIKE ${pattern}
+        OR COALESCE(${color}.slug, '') ILIKE ${pattern}
+        OR EXISTS (
+          SELECT 1 FROM product_variant_attribute_values search_av
+          JOIN attribute_options search_ao ON search_ao.id=search_av."optionId"
+          LEFT JOIN attribute_option_aliases search_aa ON search_aa."optionId"=search_ao.id
+          WHERE search_av."variantId"=${variant}.id
+            AND (search_ao.label ILIKE ${pattern} OR search_ao."canonicalKey" ILIKE ${pattern} OR search_aa."aliasLabel" ILIKE ${pattern})
+        )`;
+    }), " OR ")}
+  )`), " AND ");
+}
+
+function productIdentitySearchCondition(tokenGroups: string[][], product: Prisma.Sql, brand: Prisma.Sql) {
+  const identity = Prisma.sql`concat(' ', regexp_replace(lower(concat_ws(' ', ${brand}.name, ${product}.name, ${product}.model, ${product}.generation)), '[^a-zа-яё0-9]+', ' ', 'g'), ' ')`;
+  return Prisma.join(tokenGroups.map((group) => Prisma.sql`(${Prisma.join(group.map((alias) => Prisma.sql`${identity} LIKE ${`% ${normalizeCatalogSearchQuery(alias)} %`}`), " OR ")})`), " AND ");
+}
 
 function groupProducts(rows: ProductRow[], city: City, dictionaryRows: VariantDictionaryRow[]) {
-  const hiddenPublicAttributes = new Set(["region", "model", "productModel", "productLine", "displaySize", "screenSize", "diagonal", "диагональ"]);
   const dictionaryAttributes = new Map<string, VariantDictionaryRow[]>();
   for (const row of dictionaryRows) dictionaryAttributes.set(row.variantId, [...(dictionaryAttributes.get(row.variantId) ?? []), row]);
   const products = new Map<string, { id: string; slug: string; name: string; model: string | null; generation: string | null; chip: string | null; displaySize: string | null; releaseYear: number | null; description: unknown; specifications: unknown; isNew: boolean; isUsed: boolean; brand: { id: string; name: string; slug: string }; type: { id: string; name: string; slug: string; attributes: unknown }; category: { id: string; name: string; slug: string; parentId: string | null }; city: { name: string; slug: string }; variants: Map<string, object>; images: Map<string, object> }>();
@@ -239,17 +338,8 @@ function groupProducts(rows: ProductRow[], city: City, dictionaryRows: VariantDi
       products.set(row.id, product);
     }
     if (!product.variants.has(row.variantId)) {
-      const attributes = { ...(parseJson(row.variantAttributes) as Record<string, unknown> | null ?? {}) };
-      for (const key of Object.keys(attributes)) if (hiddenPublicAttributes.has(key)) delete attributes[key];
-      for (const [key, value] of Object.entries({ storage: row.storage, ram: row.ram, simType: row.simType, connectivity: row.connectivity, size: row.size, material: row.material })) if (value) attributes[key] = value;
-      const mainDictionaryKeys = new Set(["memory", "ram", "sim", "connectivity", "size", "material"]);
-      for (const entry of dictionaryAttributes.get(row.variantId) ?? []) {
-        if (entry.code === "region") continue;
-        const publicKey = ({ memory: "storage", sim: "simType" } as Record<string, string>)[entry.code] ?? entry.code;
-        if (mainDictionaryKeys.has(entry.code) && attributes[publicKey]) continue;
-        attributes[publicKey] = entry.label;
-      }
-      product.variants.set(row.variantId, { id: row.variantId, sku: row.sku, label: row.variantLabel, attributes, color: row.colorId ? { id: row.colorId, name: row.colorName, nameRu: row.colorNameRu, slug: row.colorSlug, hex: row.hexPrimary, secondaryHex: row.hexSecondary } : null, price: row.price, oldPrice: row.oldPrice, availability: publicAvailability(row.availability, row.allowPreorder), deliveryTime: row.deliveryTime });
+      const attributes = buildPublicVariantAttributes(parseJson(row.variantAttributes), { storage: row.storage, ram: row.ram, simType: row.simType, connectivity: row.connectivity, size: row.size, material: row.material }, dictionaryAttributes.get(row.variantId));
+      product.variants.set(row.variantId, { id: row.variantId, sku: row.sku, label: row.variantLabel, attributes, attributeLabels: buildPublicVariantAttributeLabels(dictionaryAttributes.get(row.variantId)), color: row.colorId ? { id: row.colorId, name: row.colorName, nameRu: row.colorNameRu, slug: row.colorSlug, hex: row.hexPrimary, secondaryHex: row.hexSecondary } : null, price: row.price, oldPrice: calculateOldPrice(row.price)?.toString() ?? null, availability: publicAvailability(row.availability, row.allowPreorder), deliveryTime: row.deliveryTime });
     }
     if (row.imageId && !product.images.has(row.imageId)) product.images.set(row.imageId, { id: row.imageId, src: imageUrl(row.imagePath, row.imageMimeType), alt: row.imageAlt ?? "", colorId: row.imageColorId, order: row.imageOrder ?? 0 });
   }

@@ -7,6 +7,8 @@ import { decryptPii, encryptPii, requestHash } from "@/lib/request-pii";
 import { notifyRequest } from "@/lib/telegram-requests";
 import { dualConsentEvidence, PERSONAL_DATA_CONSENT_VERSION, type ConsentEvidence } from "@/lib/consent-evidence";
 import { writeAuditLog } from "@/lib/admin-audit";
+import { calculatePromo } from "@/lib/promo-codes";
+import { formatMoneyCents, normalizePromoCode, parseMoneyCents } from "@/lib/promo-code-pricing";
 
 declare global { var requestPrisma: PrismaClient | undefined; }
 
@@ -23,6 +25,7 @@ const requestSchema = z.object({
   personalDataConsent: z.literal(true),
   privacyConsent: z.literal(true),
   items: z.array(z.object({ variantId: z.string().min(1).max(120), quantity: z.number().int().min(1).max(25) })).min(1).max(30),
+  promoCode: z.string().trim().max(64).optional().default(""),
 }).superRefine((data, ctx) => {
   if (data.fulfillment === "delivery" && !data.address) ctx.addIssue({ code: "custom", path: ["address"], message: "required" });
   if (new Set(data.items.map((item) => item.variantId)).size !== data.items.length) ctx.addIssue({ code: "custom", path: ["items"], message: "duplicates" });
@@ -46,7 +49,8 @@ export function parseRequestInput(value: unknown) { return requestSchema.safePar
 export async function createRequest(input: RequestInput, idempotencyKey: string) {
   if (!/^[\w-]{16,128}$/.test(idempotencyKey)) throw new RequestError("INVALID_IDEMPOTENCY_KEY", 400);
   const client = db();
-  const canonical = { ...input, phone: input.phone.replace(/\D/g, ""), name: input.name.trim(), address: input.address.trim(), comment: input.comment.trim(), items: [...input.items].sort((a, b) => a.variantId.localeCompare(b.variantId)) };
+  const { promoCode, ...inputWithoutPromo } = input;
+  const canonical = { ...inputWithoutPromo, ...(promoCode ? { promoCode: normalizePromoCode(promoCode) } : {}), phone: input.phone.replace(/\D/g, ""), name: input.name.trim(), address: input.address.trim(), comment: input.comment.trim(), items: [...input.items].sort((a, b) => a.variantId.localeCompare(b.variantId)) };
   const hash = requestHash(canonical);
   try {
     const result = await client.$transaction(async (tx) => {
@@ -56,11 +60,12 @@ export async function createRequest(input: RequestInput, idempotencyKey: string)
         )
         SELECT 1::int AS locked FROM lock
       `;
-      const prior = await tx.$queryRaw<Array<{ orderNumber: string; requestHash: string }>>`
-        SELECT "orderNumber", "requestHash" FROM order_attempts WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1
+      const prior = await tx.$queryRaw<Array<{ orderNumber: string; requestHash: string; orderId: string | null }>>`
+        SELECT "orderNumber", "requestHash", "orderId" FROM order_attempts WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1
       `;
       if (prior[0]) {
         if (prior[0].requestHash !== hash) throw new RequestError("IDEMPOTENCY_CONFLICT", 409);
+        if (!prior[0].orderId) throw new RequestError("IDEMPOTENCY_RETIRED", 409);
         return { requestNumber: prior[0].orderNumber, replayed: true };
       }
       const cities = await tx.$queryRaw<Array<{ id: string; name: string }>>`
@@ -82,20 +87,36 @@ export async function createRequest(input: RequestInput, idempotencyKey: string)
         throw new RequestError("STOCK_UNAVAILABLE", 409);
       }
       const lineById = new Map(rows.map((row) => [row.variantId, row]));
-      const total = input.items.reduce((sum, item) => {
+      const totalCents = input.items.reduce((sum, item) => {
         const line = lineById.get(item.variantId)!;
-        const price = line.price === null ? NaN : Number(line.price);
-        if (!Number.isFinite(price) || price < 0) throw new RequestError("PRICE_UNAVAILABLE", 409);
-        return sum + price * item.quantity;
-      }, 0);
+        if (line.price === null) throw new RequestError("PRICE_UNAVAILABLE", 409);
+        try {
+          const priceCents = parseMoneyCents(line.price);
+          if (priceCents < BigInt(0)) throw new Error("INVALID_MONEY");
+          return sum + priceCents * BigInt(item.quantity);
+        } catch {
+          throw new RequestError("PRICE_UNAVAILABLE", 409);
+        }
+      }, BigInt(0));
+      const total = formatMoneyCents(totalCents);
+      let promo = null;
+      if (input.promoCode) {
+        try { promo = await calculatePromo(tx, input.promoCode, input.city, input.items, true); }
+        catch (error) {
+          const code = error instanceof Error ? error.message : "PROMO_UNAVAILABLE";
+          if (["PROMO_INVALID", "PROMO_UNAVAILABLE"].includes(code)) throw new RequestError(code, 422);
+          throw error;
+        }
+      }
       const requestNumber = `IC-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${randomBytes(4).toString("hex").toUpperCase()}`;
       const id = `c${randomBytes(12).toString("hex")}`;
       const pii: Pii = { name: input.name.trim(), phone: input.phone.trim(), address: input.address.trim(), comment: input.comment.trim(), consentEvidence: dualConsentEvidence() };
       const encrypted = encryptPii(pii);
       await tx.$executeRaw`
         INSERT INTO orders (id,"customerName","customerPhone","customerEmail",city,"cityId","deliveryType","deliveryAddress",comment,status,source,"totalAmount","encryptedPiiPayload","consentAt","consentVersion","contactMethod","createdAt","updatedAt")
-        VALUES (${id},NULL,NULL,NULL,${city.name},${city.id},${input.fulfillment === "delivery" ? "DELIVERY" : "PICKUP"}::"DeliveryType",NULL,NULL,'NEW'::"OrderStatus",'WEB'::"OrderSource",${total},${encrypted},NOW(),${PERSONAL_DATA_CONSENT_VERSION},${input.contactMethod},NOW(),NOW())
+        VALUES (${id},NULL,NULL,NULL,${city.name},${city.id},${input.fulfillment === "delivery" ? "DELIVERY" : "PICKUP"}::"DeliveryType",NULL,NULL,'NEW'::"OrderStatus",'WEB'::"OrderSource",${promo?.total ?? total},${encrypted},NOW(),${PERSONAL_DATA_CONSENT_VERSION},${input.contactMethod},NOW(),NOW())
       `;
+      if (promo) await tx.$executeRaw`UPDATE orders SET "promoCodeId"=${promo.promoCodeId},"promoCode"=${promo.code},"discountAmount"=${promo.discount} WHERE id=${id}`;
       for (const item of input.items) {
         const line = lineById.get(item.variantId)!;
         await tx.$executeRaw`
@@ -105,7 +126,7 @@ export async function createRequest(input: RequestInput, idempotencyKey: string)
       }
       await tx.$executeRaw`
         INSERT INTO order_attempts (id,"orderId","orderNumber","cityId","itemCount","totalAmount","hasUnknownPrices",status,"idempotencyKey","requestHash","createdAt","communicationChannel")
-        VALUES (${`c${randomBytes(12).toString("hex")}`},${id},${requestNumber},${city.id},${input.items.reduce((n, item) => n + item.quantity, 0)},${total},FALSE,'PENDING'::"OrderAttemptStatus",${idempotencyKey},${hash},NOW(),${input.contactMethod})
+        VALUES (${`c${randomBytes(12).toString("hex")}`},${id},${requestNumber},${city.id},${input.items.reduce((n, item) => n + item.quantity, 0)},${promo?.total ?? total},FALSE,'PENDING'::"OrderAttemptStatus",${idempotencyKey},${hash},NOW(),${input.contactMethod})
       `;
       return { requestNumber, replayed: false };
     }, { maxWait: 5000, timeout: 15000 });
@@ -120,8 +141,8 @@ export async function createRequest(input: RequestInput, idempotencyKey: string)
   } catch (error) {
     if (error instanceof RequestError) throw error;
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const prior = await client.$queryRaw<Array<{ orderNumber: string; requestHash: string }>>`SELECT "orderNumber","requestHash" FROM order_attempts WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1`;
-      if (prior[0]?.requestHash === hash) return { requestNumber: prior[0].orderNumber, replayed: true };
+      const prior = await client.$queryRaw<Array<{ orderNumber: string; requestHash: string; orderId: string | null }>>`SELECT "orderNumber","requestHash","orderId" FROM order_attempts WHERE "idempotencyKey"=${idempotencyKey} LIMIT 1`;
+      if (prior[0]?.requestHash === hash && prior[0].orderId) return { requestNumber: prior[0].orderNumber, replayed: true };
       if (prior[0]) throw new RequestError("IDEMPOTENCY_CONFLICT", 409);
     }
     throw error;
@@ -134,6 +155,29 @@ export class RequestError extends Error {
 
 export type RequestViewer = { userId: string; role: string; sessionId?: string; name?: string | null };
 const requestStatuses = new Set(["NEW", "PROCESSING", "CONFIRMED", "SHIPPING", "COMPLETED", "CANCELLED"]);
+
+export async function getRequest(viewer: RequestViewer, identifier: string) {
+  if (!["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"].includes(viewer.role)) throw new RequestError("FORBIDDEN", 403);
+  const rows = await db().$queryRaw<any[]>`
+    SELECT o.id,c.name AS city,o."encryptedPiiPayload",o."customerName",o."customerPhone",o.comment AS "legacyComment",a."orderNumber"
+    FROM orders o
+    JOIN cities c ON c.id=o."cityId"
+    LEFT JOIN order_attempts a ON a."orderId"=o.id
+    WHERE (o.id=${identifier} OR a."orderNumber"=${identifier})
+      AND o."encryptedPiiPayload" IS NOT NULL
+      AND (${viewer.role !== "CITY_MANAGER"} OR EXISTS (
+        SELECT 1 FROM users u WHERE u.id=${viewer.userId} AND u."isActive"=TRUE AND u.role::text='CITY_MANAGER'
+          AND (COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (
+            SELECT 1 FROM user_city_access g WHERE g."userId"=u.id AND g."cityId"=o."cityId"
+          ))
+      ))
+    LIMIT 1
+  `;
+  if (!rows[0]) throw new RequestError("NOT_FOUND", 404);
+  const row = rows[0];
+  const pii = decryptPii<Pii>(row.encryptedPiiPayload);
+  return { id: row.orderNumber ?? row.id, city: row.city, name: pii.name ?? row.customerName ?? "", phone: pii.phone ?? row.customerPhone ?? "" };
+}
 
 export async function updateRequestStatus(viewer: RequestViewer, identifier: string, status: string) {
   if (!["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"].includes(viewer.role)) throw new RequestError("FORBIDDEN", 403);
@@ -157,7 +201,7 @@ export async function updateRequestStatus(viewer: RequestViewer, identifier: str
 }
 
 export async function deleteRequest(viewer: RequestViewer, identifier: string) {
-  if (viewer.role !== "OWNER") throw new RequestError("FORBIDDEN", 403);
+  if (viewer.role !== "OWNER" && viewer.role !== "ADMIN") throw new RequestError("FORBIDDEN", 403);
   const client = db();
   await client.$transaction(async (tx) => {
     const found = await tx.$queryRaw<Array<{ id: string; cityId: string; status: string }>>`
@@ -169,9 +213,21 @@ export async function deleteRequest(viewer: RequestViewer, identifier: string) {
     `;
     const order = found[0];
     if (!order) throw new RequestError("NOT_FOUND", 404);
-    if (viewer.sessionId) await writeAuditLog(tx, { ...viewer, sessionId: viewer.sessionId }, { action: "order.deleted", entityType: "order", entityId: order.id, changes: { deleted: { old: true, new: null } }, metadata: { cityId: order.cityId, status: order.status } });
-    await tx.$executeRaw`DELETE FROM order_attempts WHERE "orderId"=${order.id}`;
+    const references = await tx.$queryRaw<Array<{ tableName: string }>>`
+      SELECT child.relname AS "tableName"
+      FROM pg_constraint constraint_row
+      JOIN pg_class child ON child.oid=constraint_row.conrelid
+      WHERE constraint_row.contype='f'
+        AND constraint_row.confrelid=to_regclass('public.orders')
+        AND child.relname NOT IN ('order_items','order_attempts')
+    `;
+    if (references.length) throw new RequestError("RELATED_RECORDS", 409);
+    const attempts = await tx.$queryRaw<Array<{ orderNumber: string }>>`
+      SELECT "orderNumber" FROM order_attempts WHERE "orderId"=${order.id} LIMIT 1 FOR UPDATE
+    `;
+    if (viewer.sessionId) await writeAuditLog(tx, { ...viewer, sessionId: viewer.sessionId }, { action: "order.deleted", entityType: "order", entityId: order.id, changes: { deleted: { old: true, new: null } }, metadata: { cityId: order.cityId, status: order.status, orderNumber: attempts[0]?.orderNumber ?? (identifier.startsWith("IC-") ? identifier : null), idempotencyTombstoneRetained: Boolean(attempts[0]) } });
     await tx.$executeRaw`DELETE FROM order_items WHERE "orderId"=${order.id}`;
+    // ON DELETE SET NULL retains the unique idempotency key as a replay tombstone.
     await tx.$executeRaw`DELETE FROM orders WHERE id=${order.id}`;
   });
 }
@@ -181,7 +237,7 @@ export async function listRequests(viewer: RequestViewer) {
   if (!["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"].includes(viewer.role)) throw new RequestError("FORBIDDEN", 403);
   const rows = viewer.role === "CITY_MANAGER"
     ? await client.$queryRaw<any[]>`
-        SELECT o.id,o."createdAt",c.name AS city,o."totalAmount",o."encryptedPiiPayload",o."customerName",o."customerPhone",o."contactMethod",o."deliveryType",o.comment AS "legacyComment",o.status::text AS "orderStatus",a."orderNumber",a."itemCount",
+        SELECT o.id,o."createdAt",c.name AS city,o."totalAmount",o."discountAmount",o."promoCode",o."encryptedPiiPayload",o."customerName",o."customerPhone",o."contactMethod",o."deliveryType",o.comment AS "legacyComment",o.status::text AS "orderStatus",a."orderNumber",a."itemCount",
           COALESCE(json_agg(json_build_object('name',oi."productNameSnapshot",'sku',oi."skuSnapshot",'variant',oi."variantSnapshot",'quantity',oi.quantity,'price',oi.price)) FILTER (WHERE oi.id IS NOT NULL),'[]') AS items
         FROM orders o JOIN cities c ON c.id=o."cityId"
         LEFT JOIN order_attempts a ON a."orderId"=o.id
@@ -191,7 +247,7 @@ export async function listRequests(viewer: RequestViewer) {
         ORDER BY o."createdAt" DESC LIMIT 200
       `
     : await client.$queryRaw<any[]>`
-        SELECT o.id,o."createdAt",c.name AS city,o."totalAmount",o."encryptedPiiPayload",o."customerName",o."customerPhone",o."contactMethod",o."deliveryType",o.comment AS "legacyComment",o.status::text AS "orderStatus",a."orderNumber",a."itemCount",
+        SELECT o.id,o."createdAt",c.name AS city,o."totalAmount",o."discountAmount",o."promoCode",o."encryptedPiiPayload",o."customerName",o."customerPhone",o."contactMethod",o."deliveryType",o.comment AS "legacyComment",o.status::text AS "orderStatus",a."orderNumber",a."itemCount",
           COALESCE(json_agg(json_build_object('name',oi."productNameSnapshot",'sku',oi."skuSnapshot",'variant',oi."variantSnapshot",'quantity',oi.quantity,'price',oi.price)) FILTER (WHERE oi.id IS NOT NULL),'[]') AS items
         FROM orders o JOIN cities c ON c.id=o."cityId" LEFT JOIN order_attempts a ON a."orderId"=o.id
         LEFT JOIN order_items oi ON oi."orderId"=o.id
@@ -201,7 +257,7 @@ export async function listRequests(viewer: RequestViewer) {
       `;
   return rows.map((row) => {
     const pii = row.encryptedPiiPayload ? decryptPii<Pii>(row.encryptedPiiPayload) : { name: row.customerName ?? "", phone: row.customerPhone ?? "", address: "", comment: row.legacyComment ?? "" };
-    return { id: row.orderNumber ?? row.id, createdAt: row.createdAt, city: row.city, name: pii.name, phone: pii.phone, address: pii.address, comment: pii.comment, contactMethod: row.contactMethod, fulfillment: row.deliveryType, total: Number(row.totalAmount), status: row.orderStatus, items: row.items };
+    return { id: row.orderNumber ?? row.id, createdAt: row.createdAt, city: row.city, name: pii.name, phone: pii.phone, address: pii.address, comment: pii.comment, contactMethod: row.contactMethod, fulfillment: row.deliveryType, total: Number(row.totalAmount), discount: Number(row.discountAmount ?? 0), promoCode: row.promoCode ?? null, status: row.orderStatus, items: row.items };
   });
 }
 

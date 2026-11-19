@@ -62,6 +62,7 @@ export async function handleLeadPost(request: Request, requestType: LeadRequestT
     catch (error) { await removeCreatedLeadPhotos(savedPhotos.createdFiles); throw error; }
     if (!result.replayed) {
       await notifyLeadCreated({
+        requestId: result.id,
         requestType: parsed.data.requestType,
         requestNumber: result.requestNumber,
         city: parsed.data.city,

@@ -26,6 +26,7 @@ import {
 import CatalogProductCard from "@/components/CatalogProductCard";
 import BannerVideo from "@/components/BannerVideo";
 import LeadRequestForm from "@/components/LeadRequestForm";
+import { catalogProductCategoryHref, type CatalogMenuCategoryLinkNode } from "@/lib/catalog-menu";
 
 type ProductDetails = CatalogProductDto & { relatedProductIds?: string[] };
 type TradeInBanner = { mediaUrl: string | null; mediaType: string | null; isActive: boolean };
@@ -44,6 +45,7 @@ export default function ProductDetailsLower({
   const [canExpand, setCanExpand] = useState(false);
   const [tradeInOpen, setTradeInOpen] = useState(false);
   const [related, setRelated] = useState<CatalogProductDto[]>([]);
+  const [catalogMenu, setCatalogMenu] = useState<CatalogMenuCategoryLinkNode[]>([]);
   const [carouselAtStart, setCarouselAtStart] = useState(true);
   const [carouselAtEnd, setCarouselAtEnd] = useState(false);
   const descriptionRef = useRef<HTMLDivElement>(null);
@@ -52,6 +54,15 @@ export default function ProductDetailsLower({
     () => safeDescription(product.description).trim(),
     [product.description],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/catalog/menu?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((body) => { if (!controller.signal.aborted) setCatalogMenu(Array.isArray(body.data) ? body.data : []); })
+      .catch(() => { if (!controller.signal.aborted) setCatalogMenu([]); });
+    return () => controller.abort();
+  }, [city]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -292,6 +303,7 @@ export default function ProductDetailsLower({
                 key={item.id}
                 product={item}
                 city={city}
+                categoryHref={catalogProductCategoryHref(catalogMenu, item)}
                 compact
                 layout="catalog"
               />

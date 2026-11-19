@@ -66,13 +66,12 @@ export default function AdminTaxonomyBackend({ type }: { type: Section }) {
       const body = {
         ...(draft.id ? { id: draft.id } : {}),
         name: draft.name.trim(),
-        slug: draft.slug.trim(),
         description: draft.description.trim(),
         sortOrder: Number(draft.sortOrder),
         isActive: draft.isActive,
         ...(type === "categories" ? { parentId: draft.parentId || null } : {}),
       };
-      if (!body.name || !body.slug) throw new Error("Заполните название и slug.");
+      if (!body.name) throw new Error("Заполните название.");
       const response = await fetch(`/api/admin/taxonomy?type=${type}`, {
         method: draft.id ? "PATCH" : "POST",
         headers: { "content-type": "application/json", "x-csrf-token": csrfToken },
@@ -134,7 +133,6 @@ export default function AdminTaxonomyBackend({ type }: { type: Section }) {
       <header><h2 id="taxonomy-title">{draft.id ? "Редактирование" : "Новая запись"}: {type === "categories" ? "категория" : "бренд"}</h2><button type="button" onClick={() => setDraft(null)} aria-label="Закрыть">×</button></header>
       <div className="admin-modal-body">
         <label className="admin-form-label">Название<input autoFocus maxLength={160} value={draft.name} onChange={(event) => setDraft((current) => current ? { ...current, name: event.target.value, ...(!current.id ? { slug: makeSlug(event.target.value) } : {}) } : current)} /></label>
-        <label className="admin-form-label">Slug<input maxLength={120} value={draft.slug} onChange={(event) => setDraft((current) => current ? { ...current, slug: makeSlug(event.target.value) } : current)} /><small>Латинские буквы, цифры и дефисы</small></label>
         <label className="admin-form-label">Описание<textarea maxLength={2000} rows={3} value={draft.description} onChange={(event) => setDraft((current) => current ? { ...current, description: event.target.value } : current)} /></label>
         <label className="admin-form-label">Порядок<input type="number" min={-100000} max={100000} step={1} value={draft.sortOrder} onChange={(event) => setDraft((current) => current ? { ...current, sortOrder: Number(event.target.value) } : current)} /></label>
         {type === "categories" &&

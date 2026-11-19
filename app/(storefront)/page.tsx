@@ -1,14 +1,26 @@
 import HomeCatalog from "@/components/HomeCatalog";
+import type { Metadata } from "next";
 
-const brands = [
-  { name: "Apple", desc: "iPhone, iPad и Mac", filter: "Apple", tone: "apple", placement: "home_brand_apple" as const },
-  { name: "Samsung", desc: "Galaxy и планшеты", filter: "Samsung", tone: "samsung", placement: "home_brand_samsung" as const },
-  { name: "Dyson", desc: "Техника для дома", filter: "Dyson", tone: "dyson", placement: "home_brand_dyson" as const },
-  { name: "PlayStation", desc: "Консоли и игры", filter: "Sony", tone: "playstation", placement: "home_brand_playstation" as const },
-];
+export const metadata: Metadata = {
+  title: "Магазин техники и аксессуаров",
+  description: "Смартфоны, планшеты, ноутбуки, наушники и аксессуары в iCenter. Каталог техники, актуальные цены и наличие для Самары, Оренбурга, Москвы и Санкт-Петербурга.",
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: "iCenter — магазин техники и аксессуаров",
+    description: "Каталог техники, актуальные цены и наличие для Самары, Оренбурга, Москвы и Санкт-Петербурга.",
+    url: "/",
+    images: [{ url: "/icon-1024.png", width: 1024, height: 1024, alt: "iCenter" }],
+  },
+  twitter: {
+    title: "iCenter — магазин техники и аксессуаров",
+    description: "Каталог техники, актуальные цены и наличие для Самары, Оренбурга, Москвы и Санкт-Петербурга.",
+    images: ["/icon-1024.png"],
+  },
+};
 
 export default function Home() {
-  return <div className="layout-container home-content">
-    <HomeCatalog brands={brands} />
-  </div>;
+  const jsonLd = { "@context": "https://schema.org", "@type": "WebSite", name: "iCenter", url: "https://icenter-store.com/", inLanguage: "ru-RU", potentialAction: { "@type": "SearchAction", target: "https://icenter-store.com/catalog?q={search_term_string}", "query-input": "required name=search_term_string" } };
+  return <><script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} /><div className="layout-container home-content">
+    <HomeCatalog />
+  </div></>;
 }

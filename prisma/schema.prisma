@@ -155,6 +155,7 @@ model Product {
   relatedProducts ProductRelatedProduct[] @relation("RelatedProductSource")
   relatedFrom     ProductRelatedProduct[] @relation("RelatedProductTarget")
   tradeInLeads    TradeInLead[]
+  analyticsEvents AnalyticsEvent[]
   isPublished   Boolean          @default(false) @map("is_published")
   isArchived    Boolean          @default(false) @map("is_archived")
   createdAt     DateTime         @default(now()) @map("created_at")
@@ -474,6 +475,23 @@ model RequestItem {
   @@map("request_items")
 }
 
+model PromoCode {
+  id             String   @id
+  code           String
+  discountAmount Decimal  @map("discountAmount") @db.Decimal(12, 2)
+  usageLimit     Int?     @map("usageLimit")
+  usageCount     Int      @default(0) @map("usageCount")
+  startsAt       DateTime? @map("startsAt")
+  endsAt         DateTime? @map("endsAt")
+  isActive       Boolean  @default(true) @map("isActive")
+  description    String?
+  createdAt      DateTime @default(now()) @map("createdAt")
+  updatedAt      DateTime @updatedAt @map("updatedAt")
+
+  @@index([isActive, startsAt, endsAt])
+  @@map("promo_codes")
+}
+
 model ProductRelatedProduct {
   productId        String  @map("productId")
   relatedProductId String  @map("relatedProductId")
@@ -516,4 +534,18 @@ model SiteSetting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("site_settings")
+}
+
+model AnalyticsEvent {
+  id        BigInt   @id @default(autoincrement())
+  visitorId String   @db.Uuid
+  pathname  String   @db.VarChar(300)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([createdAt])
+  @@index([visitorId, createdAt])
+  @@index([productId, createdAt])
+  @@map("analytics_events")
 }

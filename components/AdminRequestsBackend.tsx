@@ -1,14 +1,15 @@
 "use client";
 
 import { useContext, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Trash2 } from "lucide-react";
 import { AdminUserContext } from "@/components/AdminShell";
 
 type RequestItem = { name: string; sku: string; variant: { label?: string; attributes?: Record<string, unknown> }; quantity: number; price: number };
-type RequestRow = { id: string; createdAt: string; city: string; name: string; phone: string; address: string; comment: string; contactMethod: string; fulfillment: string; total: number; status: string; items: RequestItem[] };
+type RequestRow = { id: string; createdAt: string; city: string; name: string; phone: string; address: string; comment: string; contactMethod: string; fulfillment: string; total: number; discount: number; promoCode: string | null; status: string; items: RequestItem[] };
 type TradeInRow = { id: string; requestType: "trade_in" | "installment"; origin: "page" | "product"; createdAt: string; city: string; name: string; phone: string; brand: string; deviceType: string; device: string; configuration: string; color: string; batteryHealth: number | null; equipment: string[]; condition: string; comment: string; product: string; desiredDevice: string; photoUrls: string[]; status: string };
 type SortKey = "date" | "number" | "city" | "client" | "status" | "device" | "product";
 type SortState = { key: SortKey; direction: 1 | -1 };
+type DeleteTarget = { kind: "order"; row: RequestRow } | { kind: "lead"; row: TradeInRow };
 const statusOptions = [["NEW", "Новая"], ["PROCESSING", "В обработке"], ["CONFIRMED", "Подтверждена"], ["SHIPPING", "Доставка"], ["COMPLETED", "Завершена"], ["CANCELLED", "Отменена"]] as const;
 const statusLabel = (status: string) => statusOptions.find(([value]) => value === status)?.[1] ?? status;
 const csrf = () => decodeURIComponent(document.cookie.split("; ").find((part) => part.trim().startsWith("icenter_csrf="))?.split("=")[1] ?? "");
@@ -37,11 +38,14 @@ function SortButton({ label, sortKey, sort, onSort }: { label: string; sortKey: 
 
 export default function AdminRequestsBackend() {
   const admin = useContext(AdminUserContext);
+  const canDelete = admin?.user?.role === "OWNER" || admin?.user?.role === "ADMIN";
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [tradeInRows, setTradeInRows] = useState<TradeInRow[]>([]);
   const [requestType,setRequestType]=useState<"cart"|"trade_in"|"installment">("cart");
   const [selectedTradeIn,setSelectedTradeIn]=useState<TradeInRow|null>(null);
   const [selected, setSelected] = useState<RequestRow | null>(null);
+  const [deleteTarget,setDeleteTarget]=useState<DeleteTarget|null>(null);
+  const [deleteNotice,setDeleteNotice]=useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [sort, setSort] = useState<SortState>({ key: "date", direction: -1 });
@@ -103,27 +107,35 @@ export default function AdminRequestsBackend() {
       setStatusSaving(false);
     }
   }
-  async function removeSelected() {
-    if (!selected || admin?.user?.role !== "OWNER" || deleting) return;
-    if (!window.confirm(`Удалить заявку ${selected.id}? Это действие нельзя отменить.`)) return;
+  async function confirmDelete() {
+    if (!deleteTarget || !canDelete || deleting) return;
     setDeleting(true);
     setDeleteError("");
     try {
-      const response = await fetch(`/api/admin/requests/${encodeURIComponent(selected.id)}`, {
+      const target = deleteTarget;
+      const endpoint = target.kind === "order"
+        ? `/api/admin/requests/${encodeURIComponent(target.row.id)}`
+        : `/api/admin/trade-in/${encodeURIComponent(target.row.id)}?type=${target.row.requestType}`;
+      const response = await fetch(endpoint, {
         method: "DELETE",
         headers: { "x-csrf-token": csrf() },
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const messages: Record<string, string> = { FORBIDDEN: "Удалять заявки может только владелец системы.", UNAUTHORIZED: "Войдите в систему повторно.", CSRF_INVALID: "Защита запроса устарела. Обновите страницу.", NOT_FOUND: "Заявка уже удалена или не найдена." };
+        const messages: Record<string, string> = { FORBIDDEN: "Недостаточно прав для удаления заявок.", UNAUTHORIZED: "Войдите в систему повторно.", CSRF_INVALID: "Защита запроса устарела. Обновите страницу.", NOT_FOUND: "Заявка уже удалена или не найдена.", RELATED_RECORDS: "Удаление заблокировано: у заявки есть связанные системные или финансовые записи." };
         throw new Error(messages[payload.error] ?? "Не удалось удалить заявку. Попробуйте ещё раз.");
       }
-      const removedId = selected.id;
-      setRows((current) => current.filter((row) => row.id !== removedId));
-      setSelected(null);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("request");
-      window.history.replaceState(window.history.state, "", url);
+      if (target.kind === "order") {
+        setRows((current) => current.filter((row) => row.id !== target.row.id));
+        setSelected((current) => current?.id === target.row.id ? null : current);
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("request") === target.row.id) { url.searchParams.delete("request"); window.history.replaceState(window.history.state, "", url); }
+      } else {
+        setTradeInRows((current) => current.filter((row) => row.id !== target.row.id));
+        setSelectedTradeIn((current) => current?.id === target.row.id ? null : current);
+      }
+      setDeleteTarget(null);
+      setDeleteNotice(`Заявка № ${target.row.id} удалена.`);
     } catch (cause) {
       setDeleteError(cause instanceof Error ? cause.message : "Не удалось удалить заявку. Попробуйте ещё раз.");
     } finally {
@@ -131,10 +143,10 @@ export default function AdminRequestsBackend() {
     }
   }
   const money = (amount: number) => `${amount.toLocaleString("ru-RU")} ₽`;
-  return <section className="admin-content admin-requests-page"><header className="admin-page-heading"><div><h1>Заявки</h1><p>Заявки клиентов и их текущий статус</p></div></header>
+  return <section className="admin-content admin-requests-page"><header className="admin-page-heading"><div><h1>Заявки</h1><p>Заявки клиентов и их текущий статус</p></div></header>{deleteNotice&&<p className="dictionary-message" role="status">{deleteNotice}</p>}
     <nav className="request-type-tabs" aria-label="Категории заявок">{([["cart","Корзина"],["trade_in","Trade-in"],["installment","Рассрочка"]] as const).map(([type,label])=><button key={type} type="button" className={requestType===type?"active":""} aria-pressed={requestType===type} onClick={()=>void changeType(type)}>{label}</button>)}</nav>
-    {error ? <p role="alert" className="form-error">{error === "UNAUTHORIZED" ? "Войдите в систему, чтобы просматривать заявки." : "Не удалось загрузить заявки."}</p> : loading ? <p className="request-type-empty" role="status">Загружаем заявки…</p> : requestType!=="cart" ? (!tradeInRows.length ? <p className="request-type-empty">Заявок пока нет.</p> : <div className="admin-request-cards">{sortedTradeInRows.map((row)=><article className="panel admin-request-card" key={row.id}><header><div><strong>{row.id}</strong><span>{new Date(row.createdAt).toLocaleString("ru-RU")} · {row.city}</span></div><span className="request-status-badge" data-status={row.status}>{statusLabel(row.status)}</span></header><div><strong>{row.name}</strong><a href={`tel:${row.phone.replace(/\D/g,"")}`}>{row.phone}</a><span>{row.requestType === "trade_in" ? [row.deviceType,row.device,row.configuration].filter(Boolean).join(" · ") : row.desiredDevice || row.product || "Товар не указан"}</span></div><button className="admin-secondary" type="button" onClick={()=>setSelectedTradeIn(row)}>Открыть заявку</button></article>)}</div>) : !rows.length ? <p className="request-type-empty">Заявок пока нет.</p> : <div className="workspace-table panel admin-requests-table"><table className="table"><thead><tr><th><SortButton label="Номер" sortKey="number" sort={sort} onSort={toggleSort} /></th><th><SortButton label="Дата" sortKey="date" sort={sort} onSort={toggleSort} /></th><th><SortButton label="Город" sortKey="city" sort={sort} onSort={toggleSort} /></th><th><SortButton label="Клиент" sortKey="client" sort={sort} onSort={toggleSort} /></th><th>Товары</th><th>Сумма</th><th><SortButton label="Статус" sortKey="status" sort={sort} onSort={toggleSort} /></th><th>Действия</th></tr></thead><tbody>{sortedCartRows.map((row) => <tr key={row.id}><td>{row.id}</td><td>{new Date(row.createdAt).toLocaleString("ru-RU")}</td><td>{row.city}</td><td>{row.name}<br />{row.phone}</td><td>{row.items.map((item) => `${item.name} × ${item.quantity}`).join(", ")}</td><td>{money(row.total)}</td><td><span className="request-status-badge" data-status={row.status}>{statusLabel(row.status)}</span></td><td><button className="admin-secondary" type="button" onClick={() => { setSelected(row); setStatusError(""); setDeleteError(""); }}>Открыть</button></td></tr>)}</tbody></table></div>}
-    {selectedTradeIn&&<TradeInDetail row={selectedTradeIn} onClose={()=>setSelectedTradeIn(null)} onUpdated={(status)=>{setTradeInRows(current=>current.map(row=>row.id===selectedTradeIn.id?{...row,status}:row));setSelectedTradeIn(current=>current?{...current,status}:null);}}/>}
+    {error ? <p role="alert" className="form-error">{error === "UNAUTHORIZED" ? "Войдите в систему, чтобы просматривать заявки." : "Не удалось загрузить заявки."}</p> : loading ? <p className="request-type-empty" role="status">Загружаем заявки…</p> : requestType!=="cart" ? (!tradeInRows.length ? <p className="request-type-empty">Заявок пока нет.</p> : <div className="admin-request-cards">{sortedTradeInRows.map((row)=><article className="panel admin-request-card" key={row.id}><header><div><strong>{row.id}</strong><span>{new Date(row.createdAt).toLocaleString("ru-RU")} · {row.city}</span></div><span className="request-status-badge" data-status={row.status}>{statusLabel(row.status)}</span></header><div><strong>{row.name}</strong><a href={`tel:${row.phone.replace(/\D/g,"")}`}>{row.phone}</a><span>{row.requestType === "trade_in" ? [row.deviceType,row.device,row.configuration].filter(Boolean).join(" · ") : row.desiredDevice || row.product || "Товар не указан"}</span></div><div className="request-row-actions"><button className="admin-secondary" type="button" onClick={()=>setSelectedTradeIn(row)}>Открыть заявку</button>{canDelete&&<button className="icon-action danger" type="button" title="Удалить заявку" aria-label={`Удалить заявку ${row.id}`} onClick={()=>{setDeleteError("");setDeleteTarget({kind:"lead",row});}}><Trash2 size={16}/></button>}</div></article>)}</div>) : !rows.length ? <p className="request-type-empty">Заявок пока нет.</p> : <div className="workspace-table panel admin-requests-table"><table className="table"><thead><tr><th><SortButton label="Номер" sortKey="number" sort={sort} onSort={toggleSort} /></th><th><SortButton label="Дата" sortKey="date" sort={sort} onSort={toggleSort} /></th><th><SortButton label="Город" sortKey="city" sort={sort} onSort={toggleSort} /></th><th><SortButton label="Клиент" sortKey="client" sort={sort} onSort={toggleSort} /></th><th>Товары</th><th>Сумма</th><th><SortButton label="Статус" sortKey="status" sort={sort} onSort={toggleSort} /></th><th>Действия</th></tr></thead><tbody>{sortedCartRows.map((row) => <tr key={row.id}><td>{row.id}</td><td>{new Date(row.createdAt).toLocaleString("ru-RU")}</td><td>{row.city}</td><td>{row.name}<br />{row.phone}</td><td>{row.items.map((item) => `${item.name} × ${item.quantity}`).join(", ")}</td><td>{money(row.total)}</td><td><span className="request-status-badge" data-status={row.status}>{statusLabel(row.status)}</span></td><td><span className="request-row-actions"><button className="admin-secondary" type="button" onClick={() => { setSelected(row); setStatusError(""); setDeleteError(""); }}>Открыть</button>{canDelete&&<button className="icon-action danger" type="button" title="Удалить заявку" aria-label={`Удалить заявку ${row.id}`} onClick={()=>{setDeleteError("");setDeleteTarget({kind:"order",row});}}><Trash2 size={16}/></button>}</span></td></tr>)}</tbody></table></div>}
+    {selectedTradeIn&&<TradeInDetail row={selectedTradeIn} canDelete={canDelete} onDelete={()=>{setDeleteError("");setDeleteTarget({kind:"lead",row:selectedTradeIn});}} onClose={()=>setSelectedTradeIn(null)} onUpdated={(status)=>{setTradeInRows(current=>current.map(row=>row.id===selectedTradeIn.id?{...row,status}:row));setSelectedTradeIn(current=>current?{...current,status}:null);}}/>}
     {selected && <div className="request-detail-backdrop" role="presentation" onClick={() => setSelected(null)}><section className="request-detail-modal" role="dialog" aria-modal="true" aria-labelledby="request-detail-title" onClick={(event) => event.stopPropagation()}>
       <header className="request-detail-header"><div><span>Заявка</span><h2 id="request-detail-title">{selected.id}</h2><small>{new Date(selected.createdAt).toLocaleString("ru-RU")}</small></div><button type="button" onClick={() => setSelected(null)} aria-label="Закрыть">×</button></header>
       <div className="request-detail-body"><div className="request-detail-grid">
@@ -144,16 +156,17 @@ export default function AdminRequestsBackend() {
         <section className="request-detail-section request-detail-products"><div className="request-detail-section-head"><h3>Товары</h3><span>{selected.items.length} {selected.items.length === 1 ? "позиция" : "позиций"}</span></div>
           {selected.items.map((item) => { const attributes=Object.values(item.variant?.attributes ?? {}).filter((value): value is string | number => typeof value === "string" || typeof value === "number").map(String); const variantDetails=Array.from(new Set([item.variant?.label, ...attributes].filter((value): value is string => Boolean(value)))); return <article className="request-detail-product" key={item.sku}><div><strong>{item.name}</strong><span>SKU {item.sku}</span><small>{variantDetails.join(" · ") || "Вариант"}</small></div><div className="request-detail-product-price"><span>{item.quantity} × {money(item.price)}</span><strong>{money(item.price * item.quantity)}</strong></div></article>; })}
         </section>
-        <section className="request-detail-section request-detail-cost"><h3>Стоимость</h3><div><span>Итого по заявке</span><strong>{money(selected.total)}</strong></div></section>
+        <section className="request-detail-section request-detail-cost"><h3>Стоимость</h3><div><span>Итого по заявке</span><strong>{money(selected.total)}</strong></div>{selected.promoCode && <div><span>Промокод {selected.promoCode}</span><strong>−{money(selected.discount)}</strong></div>}</section>
         <section className="request-detail-section request-detail-status"><h3>Статус</h3><select className="request-status-badge" data-status={selected.status} aria-label="Изменить статус заявки" value={selected.status} disabled={statusSaving} onChange={(event) => void saveStatus(event.target.value)}>{statusOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{statusSaving && <span>Сохраняем…</span>}{statusError && <p className="form-error" role="alert">{statusError}</p>}</section>
         <section className="request-detail-section request-detail-comment"><h3>Комментарий</h3><p>{selected.comment || "Комментарий не указан"}</p></section>
       </div></div>
-      {admin?.user?.role === "OWNER" && <footer className="request-detail-footer">{deleteError && <p className="form-error" role="alert">{deleteError}</p>}<span>Удаление окончательно удалит заявку и связанные позиции.</span><button type="button" className="admin-danger" disabled={deleting || statusSaving} onClick={() => void removeSelected()}>{deleting ? "Удаление…" : "Удалить заявку"}</button></footer>}
+      {canDelete && <footer className="request-detail-footer"><span>Удаление окончательно удалит заявку и связанные позиции.</span><button type="button" className="admin-danger" disabled={deleting || statusSaving} onClick={() => {setDeleteError("");setDeleteTarget({kind:"order",row:selected});}}>Удалить заявку</button></footer>}
     </section></div>}
+    {deleteTarget&&<div className="request-delete-confirm-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget&&!deleting)setDeleteTarget(null);}}><section className="request-delete-confirm" role="alertdialog" aria-modal="true" aria-labelledby="delete-request-title" aria-describedby="delete-request-description"><h2 id="delete-request-title">Удалить заявку № {deleteTarget.row.id}?</h2><p id="delete-request-description">Заявка и связанные с ней данные будут удалены без возможности восстановления. Вы уверены?</p>{deleteError&&<p className="form-error" role="alert">{deleteError}</p>}<footer><button type="button" className="admin-secondary" disabled={deleting} onClick={()=>setDeleteTarget(null)}>Отмена</button><button type="button" className="admin-danger" disabled={deleting} onClick={()=>void confirmDelete()}>{deleting?"Удаление…":"Удалить заявку"}</button></footer></section></div>}
   </section>;
 }
 
-function TradeInDetail({row,onClose,onUpdated}:{row:TradeInRow;onClose:()=>void;onUpdated:(status:string)=>void}) {
+function TradeInDetail({row,onClose,onUpdated,onDelete,canDelete}:{row:TradeInRow;onClose:()=>void;onUpdated:(status:string)=>void;onDelete:()=>void;canDelete:boolean}) {
   const [status,setStatus]=useState(row.status);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -168,5 +181,5 @@ function TradeInDetail({row,onClose,onUpdated}:{row:TradeInRow;onClose:()=>void;
     finally { setBusy(false); }
   }
   const label = row.requestType === "installment" ? "Рассрочка" : "Trade-in";
- return <div className="request-detail-backdrop" role="presentation" onClick={onClose}><section className="request-detail-modal trade-in-admin-detail" role="dialog" aria-modal="true" aria-label={`Заявка ${row.id}`} onClick={event=>event.stopPropagation()}><header className="request-detail-header"><div><span>{label} · {row.id}</span><h2>{row.name}</h2><small>{new Date(row.createdAt).toLocaleString("ru-RU")} · {row.city}</small></div><button type="button" onClick={onClose} aria-label="Закрыть">×</button></header><div className="request-detail-body"><div className="request-detail-grid"><section className="request-detail-section"><h3>Контакты</h3><a href={`tel:${row.phone.replace(/\D/g,"")}`}>{row.phone}</a></section>{row.requestType === "trade_in" && <section className="request-detail-section"><h3>Устройство</h3><strong>{[row.brand,row.deviceType,row.device,row.configuration,row.color].filter(Boolean).join(" · ")}</strong><span>{row.condition||"Состояние не указано"}</span>{row.batteryHealth!==null&&<span>Аккумулятор: {row.batteryHealth}%</span>}{row.equipment.length>0&&<span>Комплектация: {row.equipment.join(", ")}</span>}<small>Источник: {row.origin === "product" ? "Карточка товара" : "Страница Trade-in"}</small></section>}<section className="request-detail-section"><h3>Интересующий товар</h3><span>{row.desiredDevice||row.product||"Не выбран"}</span></section><section className="request-detail-section request-detail-comment"><h3>Комментарий</h3><p>{row.comment||"Комментарий не указан"}</p></section>{row.photoUrls.length > 0 && <section className="request-detail-section request-detail-comment"><h3>Фотографии</h3><div className="request-photo-grid">{row.photoUrls.map((url) => <a href={url} target="_blank" rel="noreferrer" key={url}><img src={url} alt="Фотография устройства" /></a>)}</div></section>}<section className="request-detail-section request-detail-status"><h3>Статус</h3><select value={status} disabled={busy} onChange={event=>void update(event.target.value)}><option value="NEW">Новая</option><option value="PROCESSING">В обработке</option><option value="CONTACTED">Связались</option><option value="COMPLETED">Завершена</option><option value="CANCELLED">Отменена</option></select>{error&&<p role="alert" className="form-error">{error}</p>}</section></div></div></section></div>;
+ return <div className="request-detail-backdrop" role="presentation" onClick={onClose}><section className="request-detail-modal trade-in-admin-detail" role="dialog" aria-modal="true" aria-label={`Заявка ${row.id}`} onClick={event=>event.stopPropagation()}><header className="request-detail-header"><div><span>{label} · {row.id}</span><h2>{row.name}</h2><small>{new Date(row.createdAt).toLocaleString("ru-RU")} · {row.city}</small></div><button type="button" onClick={onClose} aria-label="Закрыть">×</button></header><div className="request-detail-body"><div className="request-detail-grid"><section className="request-detail-section"><h3>Контакты</h3><a href={`tel:${row.phone.replace(/\D/g,"")}`}>{row.phone}</a></section>{row.requestType === "trade_in" && <section className="request-detail-section"><h3>Устройство</h3><strong>{[row.brand,row.deviceType,row.device,row.configuration,row.color].filter(Boolean).join(" · ")}</strong><span>{row.condition||"Состояние не указано"}</span>{row.batteryHealth!==null&&<span>Аккумулятор: {row.batteryHealth}%</span>}{row.equipment.length>0&&<span>Комплектация: {row.equipment.join(", ")}</span>}<small>Источник: {row.origin === "product" ? "Карточка товара" : "Страница Trade-in"}</small></section>}<section className="request-detail-section"><h3>Интересующий товар</h3><span>{row.desiredDevice||row.product||"Не выбран"}</span></section><section className="request-detail-section request-detail-comment"><h3>Комментарий</h3><p>{row.comment||"Комментарий не указан"}</p></section>{row.photoUrls.length > 0 && <section className="request-detail-section request-detail-comment"><h3>Фотографии</h3><div className="request-photo-grid">{row.photoUrls.map((url) => <a href={url} target="_blank" rel="noreferrer" key={url}><img src={url} alt="Фотография устройства" /></a>)}</div></section>}<section className="request-detail-section request-detail-status"><h3>Статус</h3><select value={status} disabled={busy} onChange={event=>void update(event.target.value)}><option value="NEW">Новая</option><option value="PROCESSING">В обработке</option><option value="CONTACTED">Связались</option><option value="COMPLETED">Завершена</option><option value="CANCELLED">Отменена</option></select>{error&&<p role="alert" className="form-error">{error}</p>}</section></div></div>{canDelete&&<footer className="request-detail-footer"><span>Удаление окончательно удалит заявку и её фотографии.</span><button type="button" className="admin-danger" disabled={busy} onClick={onDelete}>Удалить заявку</button></footer>}</section></div>;
 }

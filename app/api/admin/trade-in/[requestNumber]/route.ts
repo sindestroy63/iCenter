@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdminMutation } from "@/lib/auth";
-import { updateTradeInStatus } from "@/lib/trade-in-service";
+import { deleteTradeInLead, updateTradeInStatus, type LeadRequestType } from "@/lib/trade-in-service";
 
 export const dynamic = "force-dynamic";
 
@@ -16,5 +16,20 @@ export async function PATCH(request: Request, { params }: { params: { requestNum
     const status = message === "UNAUTHORIZED" ? 401 : message === "CSRF_INVALID" || message === "FORBIDDEN" ? 403 : message === "INVALID_STATUS" ? 400 : message === "NOT_FOUND" ? 404 : 503;
     if (status === 503) console.error("admin trade-in status update failed",{ name: error instanceof Error ? error.name : "UnknownError" });
     return NextResponse.json({ error: status === 401 ? "UNAUTHORIZED" : status === 403 ? "FORBIDDEN" : status === 400 ? "INVALID_STATUS" : status === 404 ? "NOT_FOUND" : "TRADE_IN_UNAVAILABLE" },{ status });
+  }
+}
+
+export async function DELETE(request: Request, { params }: { params: { requestNumber: string } }) {
+  try {
+    const session = await requireAdminMutation(request);
+    const type = new URL(request.url).searchParams.get("type");
+    if (type !== "trade_in" && type !== "installment") return NextResponse.json({ error: "INVALID_TYPE" }, { status: 400 });
+    await deleteTradeInLead({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, params.requestNumber, type as LeadRequestType);
+    return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const status = message === "UNAUTHORIZED" ? 401 : message === "CSRF_INVALID" || message === "FORBIDDEN" ? 403 : message === "INVALID_TYPE" ? 400 : message === "NOT_FOUND" ? 404 : message === "RELATED_RECORDS" ? 409 : 503;
+    if (status === 503) console.error("admin lead delete failed", { name: error instanceof Error ? error.name : "UnknownError" });
+    return NextResponse.json({ error: status === 401 ? "UNAUTHORIZED" : status === 403 ? "FORBIDDEN" : status === 400 ? "INVALID_TYPE" : status === 404 ? "NOT_FOUND" : status === 409 ? "RELATED_RECORDS" : "TRADE_IN_UNAVAILABLE" }, { status });
   }
 }

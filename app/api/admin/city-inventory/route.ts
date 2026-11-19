@@ -4,13 +4,14 @@ import { adminDb } from "@/lib/admin-db";
 import { authErrorStatus, requireAdminMutation, requireAdminSession } from "@/lib/auth";
 import { getCityAccess } from "@/lib/admin-city-access";
 import { auditInventoryChanges, type InventoryAuditRow } from "@/lib/admin-audit";
+import { calculateOldPrice } from "@/lib/product-price";
 
 export const dynamic = "force-dynamic";
 
 const updateSchema = z.object({
   variantId: z.string().min(1),
   cityId: z.string().min(1),
-  price: z.number().finite().nonnegative().nullable().optional(),
+  price: z.number().int().nonnegative().nullable().optional(),
   stock: z.number().int().nonnegative().nullable().optional(),
   availability: z.enum(["UNSPECIFIED", "IN_STOCK", "PREORDER", "OUT_OF_STOCK"]).optional(),
 }).strict().refine((value) => value.price !== undefined || value.stock !== undefined || value.availability !== undefined);
@@ -64,10 +65,11 @@ export async function PATCH(request: Request) {
       const grant = await getCityAccess(tx, session.userId, value.cityId);
       if (!grant.allowed) throw new Error("FORBIDDEN");
       if (value.price !== undefined && !grant.canManagePrices) throw new Error("FORBIDDEN");
-      if ((value.stock !== undefined || value.availability !== undefined) && !grant.canManageStock) throw new Error("FORBIDDEN");
+      if (value.stock !== undefined && !grant.canManageStock) throw new Error("FORBIDDEN");
+      if (value.availability !== undefined && !grant.canManagePrices) throw new Error("FORBIDDEN");
       const item = await tx.$queryRaw<InventoryAuditRow[]>`SELECT i.id,i."variantId",i."cityId",v."productId",i.price::text AS price,i."oldPrice"::text AS "oldPrice",i.stock,i.availability::text AS availability,i."allowPreorder",i."deliveryTime",i."isActive" FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i."variantId"=${value.variantId} AND i."cityId"=${value.cityId} AND i."isActive"=TRUE AND v."isActive"=TRUE LIMIT 1 FOR UPDATE OF i`;
       if (!item.length) throw new Error("NOT_FOUND");
-      if (value.price !== undefined) await tx.$executeRaw`UPDATE inventory SET price=${value.price},"updatedAt"=NOW() WHERE id=${item[0].id}`;
+      if (value.price !== undefined) await tx.$executeRaw`UPDATE inventory SET price=${value.price},"oldPrice"=${calculateOldPrice(value.price)},"updatedAt"=NOW() WHERE id=${item[0].id}`;
       if (value.stock !== undefined) await tx.$executeRaw`UPDATE inventory SET stock=${value.stock},"updatedAt"=NOW() WHERE id=${item[0].id}`;
       if (value.availability !== undefined) await tx.$executeRaw`UPDATE inventory SET availability=${value.availability}::"AvailabilityStatus","updatedAt"=NOW() WHERE id=${item[0].id}`;
       const after = await tx.$queryRaw<InventoryAuditRow[]>`SELECT i.id,i."variantId",i."cityId",v."productId",i.price::text AS price,i."oldPrice"::text AS "oldPrice",i.stock,i.availability::text AS availability,i."allowPreorder",i."deliveryTime",i."isActive" FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i.id=${item[0].id}`;

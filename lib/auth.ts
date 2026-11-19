@@ -108,7 +108,7 @@ export async function requireGlobalAdminMutation(request: Request) {
 }
 
 const dictionaryRoles = new Set(["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"]);
-const dictionaryWriteRoles = new Set(["OWNER", "ADMIN", "DEVELOPER"]);
+const dictionaryWriteRoles = new Set(["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"]);
 
 // Dictionary permissions are route-scoped; the general admin role policy stays unchanged.
 export async function getDictionarySession() {

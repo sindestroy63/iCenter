@@ -10,9 +10,12 @@ export default async function AdminLayout({children}:{children:React.ReactNode})
   const session = await getSession();
   if (!session) redirect("/admin/login");
   const routePath = requestHeaders.get("x-icenter-admin-path") ?? "/admin";
-  if (session.role === "CITY_MANAGER" && routePath !== "/admin" && routePath !== "/admin/requests" && routePath !== "/admin/inventory" && routePath !== "/admin/profile") redirect("/admin");
+  if (session.role === "CITY_MANAGER" && routePath !== "/admin" && routePath !== "/admin/requests" && routePath !== "/admin/profile" && routePath !== "/admin/dictionaries") redirect("/admin");
   const isPasswordPage = requestHeaders.get("x-icenter-admin-change-password") === "1";
   if (session.mustChangePassword && !isPasswordPage) redirect("/admin/change-password");
   if (!session.mustChangePassword && isPasswordPage) redirect("/admin");
   return <AdminShell>{children}</AdminShell>;
 }
+import type { Metadata } from "next";
+
+export const metadata: Metadata = { robots: { index: false, follow: false, noarchive: true } };

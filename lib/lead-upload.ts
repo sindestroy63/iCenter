@@ -45,3 +45,12 @@ export async function saveLeadPhotos(files: File[], idempotencyKey: string) {
 }
 
 export async function removeCreatedLeadPhotos(files: string[]) { await removeFiles(files); }
+
+export async function removeLeadPhotoUrls(urls: readonly string[]) {
+  const paths = urls.filter((url) => /^\/uploads\/\d{4}\/\d{2}\/lead-[a-f0-9]{32}\.(?:jpg|png|webp|avif)$/.test(url));
+  const results = await Promise.all(paths.map(async (url) => {
+    try { await unlink(uploadFilePath(url.slice(1))); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
+  }));
+  return { removed: results.filter(Boolean).length, failed: results.filter((removed) => !removed).length };
+}
