@@ -8,19 +8,20 @@ import { calculateOldPrice } from "@/lib/product-price";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request, { params }: { params: { slug: string } }) {
-  if (!validateSlug(params.slug)) return NextResponse.json({ error: "Invalid product slug" }, { status: 400 });
+export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  if (!validateSlug(slug)) return NextResponse.json({ error: "Invalid product slug" }, { status: 400 });
   const citySlug = validateCity(readRequestUrl(request).searchParams.get("city"));
   if (!citySlug) return cityValidationError();
   try {
     const data = await readOnly(async (tx) => {
       const city = await findCity(tx, citySlug);
       if (!city) return null;
-      const currentProduct = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM products WHERE slug=${params.slug} LIMIT 1`;
+      const currentProduct = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM products WHERE slug=${slug} LIMIT 1`;
       let productId: string | undefined = currentProduct[0]?.id;
       if (!productId) {
       const aliasRows = await tx.$queryRaw<Array<{ value: unknown }>>`SELECT value FROM settings WHERE key='products.slugAliases' LIMIT 1`;
-        productId = parseSlugAliases(aliasRows[0]?.value).find((alias) => alias.slug === params.slug)?.productId;
+        productId = parseSlugAliases(aliasRows[0]?.value).find((alias) => alias.slug === slug)?.productId;
       }
       if (!productId) return { city, rows: [], product: null };
       const resolvedProductId = productId;

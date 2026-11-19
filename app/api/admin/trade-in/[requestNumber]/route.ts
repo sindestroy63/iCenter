@@ -4,12 +4,13 @@ import { deleteTradeInLead, updateTradeInStatus, type LeadRequestType } from "@/
 
 export const dynamic = "force-dynamic";
 
-export async function PATCH(request: Request, { params }: { params: { requestNumber: string } }) {
+export async function PATCH(request: Request, { params }: { params: Promise<{ requestNumber: string }> }) {
   try {
+    const { requestNumber } = await params;
     const session = await requireAdminMutation(request);
     const body = await request.json().catch(() => null) as { status?: unknown } | null;
     if (!body || typeof body.status !== "string") return NextResponse.json({ error: "INVALID_STATUS" },{ status: 400 });
-    const status = await updateTradeInStatus({ userId: session.userId,role: session.role, sessionId: session.sessionId, name: session.name },params.requestNumber,body.status);
+    const status = await updateTradeInStatus({ userId: session.userId,role: session.role, sessionId: session.sessionId, name: session.name },requestNumber,body.status);
     return NextResponse.json({ status },{ headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -19,12 +20,13 @@ export async function PATCH(request: Request, { params }: { params: { requestNum
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: { requestNumber: string } }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ requestNumber: string }> }) {
   try {
+    const { requestNumber } = await params;
     const session = await requireAdminMutation(request);
     const type = new URL(request.url).searchParams.get("type");
     if (type !== "trade_in" && type !== "installment") return NextResponse.json({ error: "INVALID_TYPE" }, { status: 400 });
-    await deleteTradeInLead({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, params.requestNumber, type as LeadRequestType);
+    await deleteTradeInLead({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, requestNumber, type as LeadRequestType);
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

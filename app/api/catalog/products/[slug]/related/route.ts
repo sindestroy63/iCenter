@@ -3,8 +3,9 @@ import { apiError, cityValidationError, findCity, readOnly, readRequestUrl, vali
 
 export const dynamic = "force-dynamic";
 
-export async function GET(request: Request, { params }: { params: { slug: string } }) {
-  if (!validateSlug(params.slug)) return NextResponse.json({ error: "INVALID_PRODUCT" }, { status: 400 });
+export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  if (!validateSlug(slug)) return NextResponse.json({ error: "INVALID_PRODUCT" }, { status: 400 });
   const citySlug = validateCity(readRequestUrl(request).searchParams.get("city"));
   if (!citySlug) return cityValidationError();
   try {
@@ -18,7 +19,7 @@ export async function GET(request: Request, { params }: { params: { slug: string
       return tx.$queryRaw<Array<{ id: string; slug: string }>>`
         SELECT related.id,related.slug
         FROM product_related_products link
-        JOIN products source ON source.id=link."productId" AND source.slug=${params.slug} AND source.status='PUBLISHED'::"ProductStatus"
+        JOIN products source ON source.id=link."productId" AND source.slug=${slug} AND source.status='PUBLISHED'::"ProductStatus"
         JOIN products related ON related.id=link."relatedProductId" AND related.status='PUBLISHED'::"ProductStatus" AND NOT (related.specifications @> '{"tradeIn":true}'::jsonb)
         WHERE NOT (source.specifications @> '{"tradeIn":true}'::jsonb) AND EXISTS (
           SELECT 1 FROM product_variants variant

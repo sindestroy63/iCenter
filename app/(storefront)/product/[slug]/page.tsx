@@ -25,9 +25,10 @@ const getProductSeoData = cache(async (slug: string, citySlug: string) => {
     return rows[0] ?? null;
 });
 
-export async function generateMetadata({ params, searchParams }: { params: { slug: string }; searchParams: { city?: string } }): Promise<Metadata> {
-  const city = searchParams.city ?? "samara";
-  const product = await getProductSeoData(params.slug, city);
+export async function generateMetadata({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ city?: string }> }): Promise<Metadata> {
+  const [{ slug }, query] = await Promise.all([params, searchParams]);
+  const city = query.city ?? "samara";
+  const product = await getProductSeoData(slug, city);
   if (!product) return { title: "Товар не найден", robots: { index: false, follow: true } };
     const descriptionValue = typeof product.description === "string" ? product.description : product.description && typeof product.description === "object" && "text" in product.description ? product.description.text : "";
     const descriptionText = typeof descriptionValue === "string" ? descriptionValue : "";
@@ -37,9 +38,10 @@ export async function generateMetadata({ params, searchParams }: { params: { slu
     return { title: `${product.brand} ${product.name}`, description, alternates: { canonical: url }, openGraph: { type: "website", title: `${product.brand} ${product.name}`, description, url, images: [image] }, twitter: { card: "summary_large_image", title: `${product.brand} ${product.name}`, description, images: [image] } };
 }
 
-export default async function ProductPage({params,searchParams}:{params:{slug:string};searchParams:{variant?:string;city?:string}}){
-  const city = searchParams.city ?? "samara";
-  const product = await getProductSeoData(params.slug, city);
+export default async function ProductPage({params,searchParams}:{params:Promise<{slug:string}>;searchParams:Promise<{variant?:string;city?:string}>}){
+  const [{ slug }, query] = await Promise.all([params, searchParams]);
+  const city = query.city ?? "samara";
+  const product = await getProductSeoData(slug, city);
   if (!product) notFound();
   const menu = await getSeoMenu();
   const parentCategory = findSeoProductCategoryNode(menu.flat, product);
@@ -47,5 +49,5 @@ export default async function ProductPage({params,searchParams}:{params:{slug:st
   const offerAvailability = product.availability === "IN_STOCK" ? "https://schema.org/InStock" : product.availability === "PREORDER" ? "https://schema.org/PreOrder" : product.availability === "OUT_OF_STOCK" ? "https://schema.org/OutOfStock" : null;
   const descriptionValue = typeof product.description === "string" ? product.description : product.description && typeof product.description === "object" && "text" in product.description ? product.description.text : "";
   const jsonLd = { "@context": "https://schema.org", "@type": "Product", name: product.name, brand: { "@type": "Brand", name: product.brand }, category: product.category, url: `https://icenter-store.com/product/${encodeURIComponent(product.slug)}`, ...(image ? { image: [image] } : {}), ...(typeof descriptionValue === "string" && descriptionValue.trim() ? { description: descriptionValue.trim().slice(0, 5000) } : {}), ...(product.price ? { offers: { "@type": "Offer", price: product.price, priceCurrency: "RUB", url: `https://icenter-store.com/product/${encodeURIComponent(product.slug)}`, ...(offerAvailability ? { availability: offerAvailability } : {}), seller: { "@type": "Organization", name: "iCenter" } } } : {}) };
-  return <><span hidden data-analytics-product-id={product.id} /><script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />{parentCategory && <nav className="layout-container" aria-label="Хлебные крошки"><a href={parentCategory.path}>{parentCategory.title}</a></nav>}<ProductView slug={params.slug} initialVariantId={searchParams.variant ?? ""} initialName={product.name} categoryHref={parentCategory?.path ?? null}/></>;
+  return <><span hidden data-analytics-product-id={product.id} /><script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />{parentCategory && <nav className="layout-container" aria-label="Хлебные крошки"><a href={parentCategory.path}>{parentCategory.title}</a></nav>}<ProductView slug={slug} initialVariantId={query.variant ?? ""} initialName={product.name} categoryHref={parentCategory?.path ?? null}/></>;
 }

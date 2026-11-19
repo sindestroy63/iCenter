@@ -6,12 +6,13 @@ import { rm } from "node:fs/promises";
 
 export const runtime = "nodejs";
 
-export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const actor = await requireGlobalAdminMutation(request);
     const result = await adminDb().$transaction(async tx => {
       const rows = await tx.$queryRaw<Array<{ id: string; storagePath: string }>>`
-        DELETE FROM media m WHERE m.id = ${params.id}
+        DELETE FROM media m WHERE m.id = ${id}
           AND NOT EXISTS (SELECT 1 FROM product_gallery_images p WHERE p."mediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM color_gallery_images c WHERE c."mediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM banners b WHERE b."imageMediaId" = m.id)
@@ -19,15 +20,15 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
           AND NOT EXISTS (SELECT 1 FROM categories c WHERE c."imageMediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM services s WHERE s."imageMediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM users u WHERE u."avatarMediaId" = m.id)
-          AND NOT EXISTS (SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenuBanners' AND setting.value @> ${JSON.stringify({ banners: [{ imageMediaId: params.id }] })}::jsonb)
-          AND NOT EXISTS (SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenu' AND (setting.value @> ${JSON.stringify({ items: [{ banner: { imageMediaId: params.id } }] })}::jsonb OR setting.value @> ${JSON.stringify({ items: [{ promoBanner: { imageMediaId: params.id } }] })}::jsonb))
+          AND NOT EXISTS (SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenuBanners' AND setting.value @> ${JSON.stringify({ banners: [{ imageMediaId: id }] })}::jsonb)
+          AND NOT EXISTS (SELECT 1 FROM settings setting WHERE setting.key='catalog.megaMenu' AND (setting.value @> ${JSON.stringify({ items: [{ banner: { imageMediaId: id } }] })}::jsonb OR setting.value @> ${JSON.stringify({ items: [{ promoBanner: { imageMediaId: id } }] })}::jsonb))
         RETURNING m.id, m."storagePath"
       `;
       if (rows[0]) {
         await writeAuditLog(tx, actor, { action: "media.deleted", entityType: "media", entityId: rows[0].id, changes: { deleted: { old: { storagePath: rows[0].storagePath }, new: null } } });
         return { removed: rows[0], exists: true };
       }
-      const exists = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id = ${params.id} LIMIT 1`;
+      const exists = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM media WHERE id = ${id} LIMIT 1`;
       return { removed: null, exists: exists.length > 0 };
     });
     if (!result.removed) return NextResponse.json({ error: result.exists ? "MEDIA_IN_USE" : "MEDIA_NOT_FOUND" }, { status: 409 });

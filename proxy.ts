@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   if (!path.startsWith("/admin")) return NextResponse.next();
   const isLogin = path === "/admin/login";
@@ -13,7 +13,9 @@ export function middleware(request: NextRequest) {
     if (isLogin) return NextResponse.next({ request: { headers: forwardedHeaders } });
     const login = new URL("/admin/login", request.url);
     login.searchParams.set("next", `${path}${request.nextUrl.search}`);
-    return NextResponse.redirect(login);
+    const response = NextResponse.redirect(login);
+    response.headers.set("cache-control", "private, no-store");
+    return response;
   }
   return NextResponse.next({ request: { headers: forwardedHeaders } });
 }

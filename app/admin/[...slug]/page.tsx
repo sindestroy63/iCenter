@@ -19,13 +19,14 @@ import { notFound, redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminSection({ params }: { params: { slug: string[] } }) {
-  const path = `/admin/${params.slug.join("/")}`;
+export default async function AdminSection({ params }: { params: Promise<{ slug: string[] }> }) {
+  const { slug } = await params;
+  const path = `/admin/${slug.join("/")}`;
   const requestHeaders = await headers();
   const isLogin = requestHeaders.get("x-icenter-admin-login") === "1";
   if (isLogin) redirect("/admin/login");
 
-  switch (params.slug[0]) {
+  switch (slug[0]) {
     case "requests":
       return <AdminRequestsBackend />;
     case "products":

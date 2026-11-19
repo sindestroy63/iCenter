@@ -14,8 +14,9 @@ function streamFile(file: string, start?: number, end?: number) {
   return Readable.toWeb(createReadStream(file, start === undefined ? undefined : { start, end })) as ReadableStream;
 }
 
-export async function GET(request: Request, { params }: { params: { path: string[] } }) {
-  const storagePath = `uploads/${params.path.join("/")}`;
+export async function GET(request: Request, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path: pathParts } = await params;
+  const storagePath = `uploads/${pathParts.join("/")}`;
   try {
     const rows = await adminDb().$queryRaw<Array<{ storagePath: string; mimeType: string }>>`SELECT "storagePath", "mimeType" FROM media WHERE "storagePath" = ${storagePath} LIMIT 1`;
     const row = rows[0];

@@ -38,7 +38,7 @@ export function assertNotificationTestIsolation() {
 export async function deliverNotification(envelope: NotificationEnvelope) {
   if (notificationMode() !== "mock") return false;
   assertNotificationTestIsolation();
-  const outbox = path.resolve(process.env.ICENTER_NOTIFICATION_OUTBOX ?? ".tmp/notification-outbox.jsonl");
+  const outbox = path.resolve(/* turbopackIgnore: true */ process.env.ICENTER_NOTIFICATION_OUTBOX ?? ".tmp/notification-outbox.jsonl");
   await mkdir(path.dirname(outbox), { recursive: true });
   await appendFile(outbox, `${JSON.stringify(envelope)}\n`, "utf8");
   return true;

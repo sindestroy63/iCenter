@@ -9,12 +9,14 @@ const legalPages: Record<string, { title: string; description: string }> = {
   terms: { title: "Условия использования", description: "Условия использования сайта iCenter." },
 };
 
-export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
-  const page = legalPages[params.slug];
-  return page ? pageMetadata(`/${params.slug}`, page.title, page.description) : { title: "Документ не найден", robots: { index: false, follow: false } };
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const page = legalPages[slug];
+  return page ? pageMetadata(`/${slug}`, page.title, page.description) : { title: "Документ не найден", robots: { index: false, follow: false } };
 }
 
-export default function LegalPage({ params }: { params: { slug: string } }) {
-  if (!legalPages[params.slug]) notFound();
-  return <StoreInfoPage slug={params.slug} />;
+export default async function LegalPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  if (!legalPages[slug]) notFound();
+  return <StoreInfoPage slug={slug} />;
 }

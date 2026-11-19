@@ -5,19 +5,20 @@ import { requireGlobalAdminMutation } from "@/lib/auth";
 import { adminDb } from "@/lib/admin-db";
 import { writeAuditLog } from "@/lib/admin-audit";
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const actor = await requireGlobalAdminMutation(request);
     const parsed = z.object({ temporaryPassword: z.string().min(14).max(256) }).safeParse(await request.json());
     if (!parsed.success) return NextResponse.json({ error: "INVALID_PASSWORD" }, { status: 400 });
     const hash = await argon2.hash(parsed.data.temporaryPassword, { type: argon2.argon2id });
     const db = adminDb();
     await db.$transaction(async tx => {
-      const users = await tx.$queryRaw<Array<{ role: string }>>`SELECT role::text AS role FROM users WHERE id=${params.id} AND "isActive"=TRUE FOR UPDATE`;
+      const users = await tx.$queryRaw<Array<{ role: string }>>`SELECT role::text AS role FROM users WHERE id=${id} AND "isActive"=TRUE FOR UPDATE`;
       if (!users[0]) throw new Error("NOT_FOUND");
-      await tx.$executeRaw`UPDATE users SET "passwordHash"=${hash},"mustChangePassword"=FALSE,"updatedAt"=NOW() WHERE id=${params.id}`;
-      await tx.$executeRaw`UPDATE sessions SET "revokedAt"=NOW() WHERE "userId"=${params.id} AND "revokedAt" IS NULL`;
-      await writeAuditLog(tx, actor, { action: "user.password_reset", entityType: "user", entityId: params.id, changes: { old: null, new: { mustChangePassword: false } } });
+      await tx.$executeRaw`UPDATE users SET "passwordHash"=${hash},"mustChangePassword"=FALSE,"updatedAt"=NOW() WHERE id=${id}`;
+      await tx.$executeRaw`UPDATE sessions SET "revokedAt"=NOW() WHERE "userId"=${id} AND "revokedAt" IS NULL`;
+      await writeAuditLog(tx, actor, { action: "user.password_reset", entityType: "user", entityId: id, changes: { old: null, new: { mustChangePassword: false } } });
     });
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {

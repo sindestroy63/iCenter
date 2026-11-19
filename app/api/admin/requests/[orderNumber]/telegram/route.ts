@@ -5,8 +5,9 @@ import { notifyRequest } from "@/lib/telegram-requests";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request, context: { params: { orderNumber: string } }) {
+export async function POST(request: Request, context: { params: Promise<{ orderNumber: string }> }) {
   try {
+    const { orderNumber } = await context.params;
     const session = await requireAdminMutation(request);
     if (!["OWNER", "ADMIN", "DEVELOPER", "CITY_MANAGER"].includes(session.role)) {
       return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
@@ -15,7 +16,7 @@ export async function POST(request: Request, context: { params: { orderNumber: s
       const allowed = await adminDb().$queryRaw<Array<{ allowed: number }>>`
         SELECT 1 AS allowed
         FROM order_attempts a
-        WHERE a."orderNumber"=${context.params.orderNumber}
+        WHERE a."orderNumber"=${orderNumber}
           AND EXISTS (SELECT 1 FROM users u WHERE u.id=${session.userId} AND u."isActive"=TRUE AND u.role::text='CITY_MANAGER'
             AND (COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE)=TRUE OR EXISTS (
               SELECT 1 FROM user_city_access grant_city WHERE grant_city."cityId"=a."cityId" AND grant_city."userId"=u.id
@@ -24,7 +25,7 @@ export async function POST(request: Request, context: { params: { orderNumber: s
       `;
       if (!allowed.length) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     }
-    const result = await notifyRequest(context.params.orderNumber);
+    const result = await notifyRequest(orderNumber);
     return NextResponse.json({ status: result }, { status: result === "failed" ? 503 : 200 });
   } catch (error) {
     const status = error instanceof Error && error.message === "UNAUTHORIZED" ? 401 : error instanceof Error && ["FORBIDDEN", "CSRF_INVALID"].includes(error.message) ? 403 : 503;

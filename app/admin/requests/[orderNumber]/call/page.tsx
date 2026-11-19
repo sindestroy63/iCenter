@@ -7,11 +7,12 @@ import { getRequest, RequestError } from "@/lib/request-service";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminOrderCallPage({ params }: { params: { orderNumber: string } }) {
+export default async function AdminOrderCallPage({ params }: { params: Promise<{ orderNumber: string }> }) {
+  const { orderNumber } = await params;
   const session = await requireRequestSession();
   let order: Awaited<ReturnType<typeof getRequest>>;
   try {
-    order = await getRequest({ userId: session.userId, role: session.role }, params.orderNumber);
+    order = await getRequest({ userId: session.userId, role: session.role }, orderNumber);
   } catch (error) {
     if (error instanceof RequestError && (error.status === 403 || error.status === 404)) notFound();
     throw error;

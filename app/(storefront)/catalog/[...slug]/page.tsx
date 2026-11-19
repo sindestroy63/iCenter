@@ -13,15 +13,16 @@ const categories: Record<string, string> = {
   consoles: "Игровые консоли",
 };
 
-export async function generateMetadata({ params }: { params: { slug: string[] } }): Promise<Metadata> {
-  const slug = params.slug.at(-1) ?? "";
-  const category = params.slug.length === 1 ? categories[slug] : undefined;
+export async function generateMetadata({ params }: { params: Promise<{ slug: string[] }> }): Promise<Metadata> {
+  const { slug: slugParts } = await params;
+  const slug = slugParts.at(-1) ?? "";
+  const category = slugParts.length === 1 ? categories[slug] : undefined;
   if (category) {
     const description = `${category} в каталоге iCenter. Сравните доступные товары, цены и наличие.`;
     const url = `/catalog/${encodeURIComponent(slug)}`;
     return { title: category, description, alternates: { canonical: url }, openGraph: { type: "website", title: `${category} в iCenter`, description, url, images: ["/icon-1024.png"] }, twitter: { card: "summary_large_image", title: `${category} в iCenter`, description, images: ["/icon-1024.png"] } };
   }
-  const seo = await getSeoMenuNode(params.slug);
+  const seo = await getSeoMenuNode(slugParts);
   if (seo) {
     const node = seo.node;
     const image = await getSeoMenuImage(node).catch(() => null) ?? "/icon-1024.png";
@@ -47,11 +48,12 @@ export async function generateMetadata({ params }: { params: { slug: string[] } 
   return { title: "Каталог", robots: { index: false, follow: true } };
 }
 
-export default async function CatalogSlugPage({ params }: { params: { slug: string[] } }) {
-  const slug = params.slug.at(-1) ?? "";
-  const category = params.slug.length === 1 ? categories[slug] : undefined;
+export default async function CatalogSlugPage({ params }: { params: Promise<{ slug: string[] }> }) {
+  const { slug: slugParts } = await params;
+  const slug = slugParts.at(-1) ?? "";
+  const category = slugParts.length === 1 ? categories[slug] : undefined;
   if (category) return <CatalogView title={category} category={slug} />;
-  const seo = await getSeoMenuNode(params.slug);
+  const seo = await getSeoMenuNode(slugParts);
   if (seo) {
     const node = seo.node;
     if (node.action?.type === "category" && node.action.categoryId === "trade-in") {

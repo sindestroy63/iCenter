@@ -4,14 +4,15 @@ import { deleteRequest, RequestError, updateRequestStatus } from "@/lib/request-
 
 export const dynamic = "force-dynamic";
 
-export async function PATCH(request: Request, context: { params: { orderNumber: string } }) {
+export async function PATCH(request: Request, context: { params: Promise<{ orderNumber: string }> }) {
   try {
+    const { orderNumber } = await context.params;
     const session = await requireAdminMutation(request);
     const body = await request.json().catch(() => null);
     if (!body || typeof body.status !== "string") return NextResponse.json({ error: "INVALID_STATUS" }, { status: 400 });
     const status = await updateRequestStatus(
       { userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name },
-      context.params.orderNumber,
+      orderNumber,
       body.status,
     );
     return NextResponse.json({ status }, { headers: { "cache-control": "no-store" } });
@@ -27,11 +28,12 @@ export async function PATCH(request: Request, context: { params: { orderNumber: 
   }
 }
 
-export async function DELETE(request: Request, context: { params: { orderNumber: string } }) {
+export async function DELETE(request: Request, context: { params: Promise<{ orderNumber: string }> }) {
   try {
+    const { orderNumber } = await context.params;
     const session = await requireAdminMutation(request);
     if (session.role !== "OWNER" && session.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
-    await deleteRequest({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, context.params.orderNumber);
+    await deleteRequest({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, orderNumber);
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const status = error instanceof RequestError ? error.status

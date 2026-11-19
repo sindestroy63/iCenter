@@ -16,12 +16,14 @@ const pageMetadata: Record<string, { title: string; description: string }> = {
   warranty: { title: "Гарантия и поддержка", description: "Информация о гарантии и порядке обращения за поддержкой iCenter." },
 };
 
-export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
-  const page = pageMetadata[params.slug];
-  return page ? buildPageMetadata(`/${params.slug}`, page.title, page.description) : { title: "Страница не найдена", robots: { index: false, follow: false } };
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const page = pageMetadata[slug];
+  return page ? buildPageMetadata(`/${slug}`, page.title, page.description) : { title: "Страница не найдена", robots: { index: false, follow: false } };
 }
 
-export default function StoreInfoRoute({ params }: { params: { slug: string } }) {
-  if (!pageMetadata[params.slug]) notFound();
-  return <StoreInfoPage slug={params.slug} />;
+export default async function StoreInfoRoute({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  if (!pageMetadata[slug]) notFound();
+  return <StoreInfoPage slug={slug} />;
 }
