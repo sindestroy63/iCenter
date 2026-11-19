@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, BadgeRussianRuble, Check, ChevronRight, Gamepad2, Grid2X2, Heart, House, Laptop, Minus, PackageOpen, Plus, Repeat2, ShieldCheck, ShoppingCart, Smartphone, Tablet } from "lucide-react";
 import { formatCartVariantDetails, useStoreState } from "./StoreState";
 import ProductDetailsLower from "./ProductDetailsLower";
-import { catalogAttributeLabel, formatFeatureValue, productImage, variantAttribute, type CatalogProductDto, type CatalogVariantDto } from "./catalogClient";
+import { catalogAttributeLabel, formatFeatureValue, productImage, variantAttribute, variantAvailabilityLabel, type CatalogProductDto, type CatalogVariantDto } from "./catalogClient";
 import { compareMemoryValues } from "@/lib/product-dictionaries";
 import { catalogColorDetails, catalogColorHex, catalogColorLabel } from "@/lib/catalog-colors";
 import ColorName from "./ColorName";
@@ -23,7 +23,6 @@ function productVariantAttribute(variant: CatalogVariantDto, key: string) {
 }
 
 function formatPrice(value: string | null) { return value === null ? "Уточняйте цену" : `${Number(value).toLocaleString("ru-RU")} ₽`; }
-function availabilityText(value: CatalogVariantDto["availability"]) { return value === "IN_STOCK" ? "В наличии" : value === "PREORDER" ? "Под заказ 1–2 дня" : value === "OUT_OF_STOCK" ? "Нет в наличии" : "Уточняйте наличие"; }
 const categoryIcons = { smartphones: Smartphone, tablets: Tablet, laptops: Laptop, appliances: House, consoles: Gamepad2 };
 
 export default function ProductView({ slug, initialVariantId = "", initialName = "", categoryHref = null }: { slug: string; initialVariantId?: string; initialName?: string; categoryHref?: string | null }) {
@@ -103,7 +102,7 @@ export default function ProductView({ slug, initialVariantId = "", initialName =
   const valueAvailable = (key: string, value: string) => variants.some((candidate) => productVariantAttribute(candidate, key) === value);
   const colorAvailable = (colorId: string) => variants.some((candidate) => candidate.color?.id === colorId);
   const canPurchase = Boolean(selectedVariant && selectedVariant.price !== null && ["IN_STOCK", "PREORDER"].includes(selectedVariant.availability));
-  const add = () => { if (!product || !selectedVariant || !canPurchase) return; const fallbackLabel = product.brand.slug === "dyson" && !selectedVariant.color ? null : selectedVariant.label; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, fallbackLabel), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
+  const add = () => { if (!product || !selectedVariant || !canPurchase) return; const fallbackLabel = product.brand.slug === "dyson" && !selectedVariant.color ? null : selectedVariant.label; addToCart({ productId: product.id, variantId: selectedVariant.id, slug: product.slug, name: product.name, image: images[0]?.src ?? productImage(product), details: formatCartVariantDetails(selectedVariant.color ? catalogColorDetails(selectedVariant.color) : null, selectedVariant.attributes, fallbackLabel), price: selectedVariant.price === null ? null : Number(selectedVariant.price), priceCity: city, availability: selectedVariant.availability, deliveryTime: selectedVariant.deliveryTime, city }, quantity); setAdded(true); window.setTimeout(() => setAdded(false), 1300); };
 
   if (loading) return <div className="layout-container loading-state">{initialName && <h1>{initialName}</h1>}Загрузка товара…</div>;
   if (error || !product) return <div className="layout-container empty-state product-not-found"><h1>{error ? "Не удалось загрузить товар" : "Товар не найден"}</h1><p>{error ? "Проверьте соединение и повторите попытку." : "Опубликованный товар недоступен для выбранного города."}</p><Link href="/catalog">Вернуться в каталог</Link></div>;
@@ -137,7 +136,7 @@ export default function ProductView({ slug, initialVariantId = "", initialName =
         </div>
         <div className="product-heading-line"><h1>{product.name}</h1>{usedDetails.isUsed&&<span className="product-used-badge">Б/у</span>}</div>
         {usedDetails.isUsed&&<div className="product-used-details">{usedDetails.condition&&<span>Состояние: {usedDetails.condition}</span>}{usedDetails.batteryHealth!==null&&<span>Аккумулятор: {usedDetails.batteryHealth}%</span>}{usedDetails.equipment&&<span>Комплект: {usedDetails.equipment}</span>}{usedDetails.defects&&<span>Особенности: {usedDetails.defects}</span>}</div>}
-        <div className="availability"><span className={`availability-dot availability-dot-${selectedVariant?.availability?.toLowerCase() ?? "unspecified"}`} aria-hidden="true" />{selectedVariant ? availabilityText(selectedVariant.availability) : "Нет доступных вариантов"}</div>
+        <div className="availability"><span className={`availability-dot availability-dot-${selectedVariant?.availability?.toLowerCase() ?? "unspecified"}`} aria-hidden="true" />{selectedVariant ? variantAvailabilityLabel(selectedVariant) : "Нет доступных вариантов"}</div>
         <hr className="product-divider product-availability-divider" />
           <div className="product-price">{formatPrice(selectedVariant?.price ?? null)}</div>
           {selectedVariant && selectedVariant.price !== null && selectedVariant.oldPrice && <div className="product-old-price"><s>{formatPrice(selectedVariant.oldPrice)}</s></div>}

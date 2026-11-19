@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { createHmac, randomUUID } from "node:crypto";
+import { APPROVED_AVAILABILITY_OPTIONS, availabilityLabel, availabilitySnapshot } from "@/lib/inventory-availability";
 
 export const PRICE_EXPORT_FORMAT_ID = "icenter-price-list";
 export const PRICE_EXPORT_FORMAT_VERSION = "2";
@@ -29,6 +30,8 @@ export type PriceExportRow = {
   resolvedAttributes?: unknown;
   price: string | null;
   availability: string | null;
+  allowPreorder: boolean | null;
+  deliveryTime: string | null;
 };
 
 export type PriceExportMetadata = {
@@ -40,12 +43,6 @@ export type PriceExportMetadata = {
 };
 
 const collator = new Intl.Collator("ru", { numeric: true, sensitivity: "base" });
-const availabilityLabels: Record<string, string> = {
-  IN_STOCK: "В наличии",
-  PREORDER: "Под заказ",
-  OUT_OF_STOCK: "Недоступен",
-};
-
 function text(value: unknown) {
   return String(value ?? "").trim();
 }
@@ -296,6 +293,7 @@ export async function buildPriceExportWorkbook(rows: PriceExportRow[], metadata:
   let previousProductId = "";
   let groupIndex = -1;
   for (const source of sortedRows) {
+    const originalAvailability = source.inventoryId ? availabilitySnapshot(source) : "";
     const startsModel = source.productId !== previousProductId;
     if (startsModel) groupIndex += 1;
     previousProductId = source.productId;
@@ -311,18 +309,18 @@ export async function buildPriceExportWorkbook(rows: PriceExportRow[], metadata:
       connectivity: excelSafeText(source.connectivity),
       other: otherCharacteristics(source),
       price: decimal(source.price),
-      availability: source.inventoryId ? (availabilityLabels[source.availability ?? ""] ?? "") : "",
+      availability: source.inventoryId ? availabilityLabel(source) : "",
       productId: source.productId,
       variantId: source.variantId,
       cityId: source.cityId,
       inventoryId: source.inventoryId ?? "",
       snapshotUpdatedAt: snapshotTime(source.snapshotUpdatedAt),
       originalPrice: source.price ?? "",
-      originalAvailability: source.availability ?? "",
+      originalAvailability,
       exportId,
       formatId: PRICE_EXPORT_FORMAT_ID,
       formatVersion: PRICE_EXPORT_FORMAT_VERSION,
-      snapshotSignature: priceExportRowSignature(source, exportId, signingKey),
+      snapshotSignature: priceExportRowSignature({ ...source, availability: originalAvailability }, exportId, signingKey),
     });
     row.height = 24;
     row.alignment = { vertical: "middle", wrapText: true };
@@ -342,7 +340,7 @@ export async function buildPriceExportWorkbook(rows: PriceExportRow[], metadata:
     row.getCell("availability").dataValidation = {
       type: "list",
       allowBlank: true,
-      formulae: ['"В наличии,Под заказ,Недоступен"'],
+      formulae: [`"${APPROVED_AVAILABILITY_OPTIONS.map(([, label]) => label).join(",")}"`],
       showErrorMessage: true,
       errorTitle: "Некорректная доступность",
       error: "Выберите значение из списка.",
@@ -382,7 +380,7 @@ export async function buildPriceExportWorkbook(rows: PriceExportRow[], metadata:
   instruction.addRow([]);
   instruction.addRow(["Редактируемые поля", "Актуальная цена и доступность выделены мягким жёлтым цветом."]);
   instruction.addRow(["Цена", "Указывайте целое количество рублей без копеек. Старая цена рассчитывается автоматически."]);
-  instruction.addRow(["Доступность", "Допустимы только: «В наличии», «Под заказ», «Недоступен»."]);
+  instruction.addRow(["Доступность", `Допустимы только: ${APPROVED_AVAILABILITY_OPTIONS.map(([, label]) => `«${label}»`).join(", ")}.`]);
   instruction.addRow(["Служебные поля", "Скрыты и защищены от случайного редактирования. Подпись snapshot будет проверяться сервером на этапе импорта."]);
   instruction.addRow(["Важно", "Не переименовывайте листы и колонки. Защита Excel предотвращает случайные изменения, но не является механизмом доверия."]);
   instruction.eachRow((row, rowNumber) => {

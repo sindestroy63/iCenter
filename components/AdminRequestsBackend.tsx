@@ -38,7 +38,7 @@ function SortButton({ label, sortKey, sort, onSort }: { label: string; sortKey: 
 
 export default function AdminRequestsBackend() {
   const admin = useContext(AdminUserContext);
-  const contextCanDelete = admin?.user?.role === "OWNER" || admin?.user?.role === "ADMIN";
+  const contextCanDelete = admin?.user?.role === "OWNER" || admin?.user?.role === "ADMIN" || admin?.user?.role === "DEVELOPER";
   const [apiCanDelete, setApiCanDelete] = useState(false);
   const canDelete = apiCanDelete || contextCanDelete;
   const [rows, setRows] = useState<RequestRow[]>([]);

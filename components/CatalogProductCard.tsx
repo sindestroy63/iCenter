@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Check, ChevronRight, Heart, PackageOpen, ShoppingCart } from "lucide-react";
 import { formatCartVariantDetails, useStoreState } from "./StoreState";
 import { catalogColorDetails } from "@/lib/catalog-colors";
-import { availabilityLabel, getCatalogCharacteristics, productVariantImage, selectCatalogVariant, type CatalogProductDto } from "./catalogClient";
+import { availabilityLabel, getCatalogCharacteristics, productVariantImage, selectCatalogVariant, variantAvailabilityLabel, type CatalogProductDto } from "./catalogClient";
 import ColorName from "./ColorName";
 import { isPlainPrimaryClick, useProductReveal } from "./ProductRevealProvider";
 
@@ -31,7 +31,7 @@ export default function CatalogProductCard({ product, city, variantId, categoryH
   const add = () => {
     if (!variant || selected.price === null || !canPurchase) return;
     const fallbackLabel = product.brand.slug === "dyson" && !variant.color ? null : variant.label;
-    addToCart({ productId: product.id, variantId: variant.id, slug: product.slug, name: product.name, image: imageSrc, details: formatCartVariantDetails(variant.color ? catalogColorDetails(variant.color) : null, variant.attributes, fallbackLabel), price: selected.price, priceCity: city, availability: selected.availability, city });
+    addToCart({ productId: product.id, variantId: variant.id, slug: product.slug, name: product.name, image: imageSrc, details: formatCartVariantDetails(variant.color ? catalogColorDetails(variant.color) : null, variant.attributes, fallbackLabel), price: selected.price, priceCity: city, availability: selected.availability, deliveryTime: variant.deliveryTime, city });
     setAdded(true);
     window.setTimeout(() => setAdded(false), 900);
   };
@@ -60,7 +60,7 @@ export default function CatalogProductCard({ product, city, variantId, categoryH
         </div>
       </Link>
     </div>
-    <div className={`product-tile-availability is-${selected.availability.toLowerCase()}`}><i aria-hidden="true" />{availabilityLabel(selected.availability)}</div>
-    <div className="product-tile-bottom"><div className="product-tile-prices"><strong>{selected.price === null ? "Уточняйте цену" : `${variantId ? "" : "от "}${selected.price.toLocaleString("ru-RU")} ₽`}</strong>{oldPrice !== null && <s>{variantId ? "" : "от "}{oldPrice.toLocaleString("ru-RU")} ₽</s>}</div><button className={`product-tile-cart${added ? " added" : ""}`} type="button" disabled={!canPurchase || added} aria-label={canPurchase ? `Добавить ${product.name} в корзину` : `${product.name}: ${availabilityLabel(selected.availability).toLocaleLowerCase("ru-RU")}`} title={canPurchase ? "Добавить выбранный вариант в корзину" : availabilityLabel(selected.availability)} onClick={add}>{added ? <Check size={19} /> : <ShoppingCart size={18} />}</button></div>
+    <div className={`product-tile-availability is-${selected.availability.toLowerCase()}`}><i aria-hidden="true" />{variant ? variantAvailabilityLabel(variant) : availabilityLabel(selected.availability)}</div>
+    <div className="product-tile-bottom"><div className="product-tile-prices"><strong>{selected.price === null ? "Уточняйте цену" : `${variantId ? "" : "от "}${selected.price.toLocaleString("ru-RU")} ₽`}</strong>{oldPrice !== null && <s>{variantId ? "" : "от "}{oldPrice.toLocaleString("ru-RU")} ₽</s>}</div><button className={`product-tile-cart${added ? " added" : ""}`} type="button" disabled={!canPurchase || added} aria-label={canPurchase ? `Добавить ${product.name} в корзину` : `${product.name}: ${(variant ? variantAvailabilityLabel(variant) : availabilityLabel(selected.availability)).toLocaleLowerCase("ru-RU")}`} title={canPurchase ? "Добавить выбранный вариант в корзину" : variant ? variantAvailabilityLabel(variant) : availabilityLabel(selected.availability)} onClick={add}>{added ? <Check size={19} /> : <ShoppingCart size={18} />}</button></div>
   </article>;
 }

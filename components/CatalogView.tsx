@@ -19,6 +19,7 @@ import {
   catalogAttributeLabel,
   productVariantImage,
   variantAttribute,
+  variantAvailabilityKey,
   type CatalogProductDto,
   type CatalogVariantDto,
 } from "./catalogClient";
@@ -962,7 +963,7 @@ export default function CatalogView({
             return false;
           if (
             selectedAvailability &&
-            variant.availability !== selectedAvailability
+            variantAvailabilityKey(variant) !== selectedAvailability
           )
             return false;
           if (Object.entries(selectedDynamicAttributes).some(([code, values]) => {
@@ -1515,19 +1516,27 @@ export default function CatalogView({
                 <input
                   type="radio"
                   name="availability"
-                  checked={selectedAvailability === "PREORDER"}
-                  onChange={() => setSelectedAvailability("PREORDER")}
+                  checked={selectedAvailability === "EXPECTED_1_2"}
+                  onChange={() => setSelectedAvailability("EXPECTED_1_2")}
                 />
-                Под заказ
+                Ожидается поступление 1-2 дня
               </label>
               <label>
                 <input
                   type="radio"
                   name="availability"
-                  checked={selectedAvailability === "OUT_OF_STOCK"}
-                  onChange={() => setSelectedAvailability("OUT_OF_STOCK")}
+                  checked={selectedAvailability === "PREORDER_1_2"}
+                  onChange={() => setSelectedAvailability("PREORDER_1_2")}
                 />
-                Нет в наличии
+                Под заказ 1-2 дня
+              </label>
+              <label>
+                <input type="radio" name="availability" checked={selectedAvailability === "PREORDER_2_4"} onChange={() => setSelectedAvailability("PREORDER_2_4")} />
+                Под заказ 2-4 дня
+              </label>
+              <label>
+                <input type="radio" name="availability" checked={selectedAvailability === "CHECK_AVAILABILITY"} onChange={() => setSelectedAvailability("CHECK_AVAILABILITY")} />
+                Наличие уточняйте
               </label>
             </div>
           </FilterGroup>}

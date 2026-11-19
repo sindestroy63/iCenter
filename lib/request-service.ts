@@ -201,7 +201,7 @@ export async function updateRequestStatus(viewer: RequestViewer, identifier: str
 }
 
 export async function deleteRequest(viewer: RequestViewer, identifier: string) {
-  if (viewer.role !== "OWNER" && viewer.role !== "ADMIN") throw new RequestError("FORBIDDEN", 403);
+  if (!["OWNER", "ADMIN", "DEVELOPER"].includes(viewer.role)) throw new RequestError("FORBIDDEN", 403);
   const client = db();
   await client.$transaction(async (tx) => {
     const found = await tx.$queryRaw<Array<{ id: string; cityId: string; status: string }>>`

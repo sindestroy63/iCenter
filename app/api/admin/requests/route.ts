@@ -13,7 +13,7 @@ export async function GET(request: Request) {
     const data = type === "trade_in" || type === "installment"
       ? (await listTradeInLeads(viewer)).filter((row) => row.requestType === type)
       : await listRequests(viewer);
-    return NextResponse.json({ data, permissions: { canDelete: session.role === "OWNER" || session.role === "ADMIN" } }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json({ data, permissions: { canDelete: ["OWNER", "ADMIN", "DEVELOPER"].includes(session.role) } }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const status = error instanceof RequestError ? error.status : error instanceof Error && error.message === "UNAUTHORIZED" ? 401 : error instanceof Error && error.message === "FORBIDDEN" ? 403 : 503;
     if (status === 503) {

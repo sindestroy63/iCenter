@@ -58,7 +58,7 @@ export async function getPriceExportData(session: ExportSession, filters: { city
       g."canonicalKey" AS "productTypeKey",g.name AS "productTypeName",v.sku,v.storage,
       COALESCE(NULLIF(to_jsonb(color)->>'nameRu',''),color.name) AS "colorName",
       v."simType",v.ram,v.connectivity,v.size,v.material,v.label,v.attributes,resolved_attributes.attributes AS "resolvedAttributes",
-      i.price::text AS price,i.availability::text AS availability
+      i.price::text AS price,i.availability::text AS availability,i."allowPreorder",i."deliveryTime"
     FROM products p
     JOIN brands b ON b.id=p."brandId" AND b."isActive"=TRUE
     JOIN categories c ON c.id=p."categoryId" AND c."isActive"=TRUE

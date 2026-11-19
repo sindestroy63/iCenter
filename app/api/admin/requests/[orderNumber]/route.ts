@@ -32,7 +32,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ orde
   try {
     const { orderNumber } = await context.params;
     const session = await requireAdminMutation(request);
-    if (session.role !== "OWNER" && session.role !== "ADMIN") return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+    if (!["OWNER", "ADMIN", "DEVELOPER"].includes(session.role)) return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
     await deleteRequest({ userId: session.userId, role: session.role, sessionId: session.sessionId, name: session.name }, orderNumber);
     return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
   } catch (error) {

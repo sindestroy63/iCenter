@@ -1,3 +1,5 @@
+import { availabilityLabel as inventoryAvailabilityLabel } from "@/lib/inventory-availability";
+
 export type CatalogVariantDto = {
   id: string;
   sku: string;
@@ -193,8 +195,23 @@ export function getCatalogCharacteristics(product: CatalogProductDto, variant: C
 export function availabilityLabel(availability: CatalogVariantDto["availability"]) {
   if (availability === "IN_STOCK") return "В наличии";
   if (availability === "PREORDER") return "Под заказ";
-  if (availability === "OUT_OF_STOCK") return "Нет в наличии";
+  if (availability === "OUT_OF_STOCK") return "Недоступен";
   return "Наличие уточняйте";
+}
+
+export function variantAvailabilityLabel(variant: Pick<CatalogVariantDto, "availability" | "deliveryTime">) {
+  return inventoryAvailabilityLabel({ availability: variant.availability, allowPreorder: variant.availability === "PREORDER", deliveryTime: variant.deliveryTime ?? null });
+}
+
+export function variantAvailabilityKey(variant: Pick<CatalogVariantDto, "availability" | "deliveryTime">) {
+  if (variant.availability === "IN_STOCK") return "IN_STOCK";
+  if (variant.availability === "UNSPECIFIED") return "CHECK_AVAILABILITY";
+  if (variant.availability === "PREORDER") {
+    if (variant.deliveryTime === "Ожидается поступление 1-2 дня") return "EXPECTED_1_2";
+    if (variant.deliveryTime === "Под заказ 1-2 дня") return "PREORDER_1_2";
+    if (variant.deliveryTime === "Под заказ 2-4 дня") return "PREORDER_2_4";
+  }
+  return "LEGACY";
 }
 
 export function productImage(product: CatalogProductDto): string {

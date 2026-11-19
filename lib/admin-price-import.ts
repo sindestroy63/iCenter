@@ -10,6 +10,7 @@ import { getPriceExportOptions } from "@/lib/admin-price-export-data";
 import { MAX_PRICE_EXPORT_ROWS, PRICE_EXPORT_FORMAT_ID, PRICE_EXPORT_FORMAT_VERSION, priceExportRowSignature } from "@/lib/admin-price-export";
 import { evaluateCityAccess } from "@/lib/city-access-policy";
 import { calculateOldPrice } from "@/lib/product-price";
+import { APPROVED_AVAILABILITY, APPROVED_AVAILABILITY_OPTIONS, availabilityLabelFromSnapshot, availabilitySnapshot, inventoryTupleForAvailability, type ApprovedAvailability } from "@/lib/inventory-availability";
 
 export const MAX_PRICE_IMPORT_BYTES = 8 * 1024 * 1024;
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
@@ -86,16 +87,7 @@ const legacyHeaders = [
   "_originalPrice", "_originalOldPrice", "_originalAvailability", "_exportId", "_formatId", "_formatVersion", "_snapshotSignature",
 ];
 
-const availabilityByLabel: Record<string, string> = {
-  "В наличии": "IN_STOCK",
-  "Под заказ": "PREORDER",
-  "Недоступен": "OUT_OF_STOCK",
-};
-const availabilityLabel: Record<string, string> = {
-  IN_STOCK: "В наличии",
-  PREORDER: "Под заказ",
-  OUT_OF_STOCK: "Недоступен",
-};
+const availabilityByLabel = Object.fromEntries(APPROVED_AVAILABILITY_OPTIONS.map(([value, label]) => [label, value])) as Record<string, ApprovedAvailability>;
 
 function cellValue(cell: ExcelJS.Cell) {
   const value = cell.value;
@@ -190,7 +182,8 @@ function parseWorkbook(buffer: Buffer, selectedCityId: string, signingKey: strin
       if (getText(21) !== PRICE_EXPORT_FORMAT_ID || getText(22) !== PRICE_EXPORT_FORMAT_VERSION) addError(row, "Идентификатор или версия формата строки не совпадает.");
       if (row.cityId !== selectedCityId) addError(row, "Файл создан для другого города.");
       if (!Number.isFinite(new Date(row.snapshotUpdatedAt).getTime())) addError(row, "Некорректная дата snapshot.");
-      if (originalAvailability && !["IN_STOCK", "PREORDER", "OUT_OF_STOCK", "UNSPECIFIED"].includes(originalAvailability)) addError(row, "Некорректное исходное значение доступности.");
+      if (["PREORDER", "OUT_OF_STOCK", "UNSPECIFIED"].includes(originalAvailability ?? "")) addError(row, "Файл содержит прежний неоднозначный формат доступности. Экспортируйте новый файл.");
+      else if (originalAvailability && !(originalAvailability in APPROVED_AVAILABILITY) && !originalAvailability.startsWith("LEGACY_")) addError(row, "Некорректное исходное значение доступности.");
       try {
         const originalPriceValue = snapshotPrice(originalPrice);
         const calculated = priceExportRowSignature({
@@ -216,16 +209,16 @@ function parseWorkbook(buffer: Buffer, selectedCityId: string, signingKey: strin
         const visibleAvailability = stringValue(values[11]);
         if (values[11] !== null && values[11] !== undefined && typeof values[11] !== "string") addError(row, "Доступность должна быть текстовым значением из списка.");
         const mappedAvailability = availabilityByLabel[visibleAvailability];
-        if (visibleAvailability && !mappedAvailability) addError(row, "Выберите допустимую доступность из списка.");
+        if (visibleAvailability && !mappedAvailability && visibleAvailability !== availabilityLabelFromSnapshot(originalAvailability)) addError(row, "Выберите допустимую доступность из списка.");
         else if (!visibleAvailability) {
           if (originalAvailability && originalAvailability !== "UNSPECIFIED") addError(row, "Доступность нельзя очистить.");
           else row.availability = originalAvailability;
         } else {
-          row.availability = mappedAvailability;
-          if (row.availability !== (originalAvailability ?? "UNSPECIFIED")) row.changes.push("availability");
+          row.availability = mappedAvailability ?? originalAvailability;
+          if (row.availability !== (originalAvailability ?? "")) row.changes.push("availability");
         }
 
-        if ((row.availability === "IN_STOCK" || row.availability === "PREORDER") && row.price === null) addError(row, "Для этой доступности требуется актуальная цена.");
+        if (row.availability && row.availability !== "CHECK_AVAILABILITY" && !row.availability.startsWith("LEGACY_") && row.price === null) addError(row, "Для этой доступности требуется актуальная цена.");
       } catch (error) {
         addError(row, error instanceof Error && error.message === "IMPORT_PRICE_INVALID" ? `Строка ${rowNumber}: цена должна быть целым числом рублей от 0 до 99 999 999, без копеек.` : "Некорректное значение цены.");
       }
@@ -268,7 +261,7 @@ function compareSnapshot(row: ImportRow, current: CurrentRow | undefined) {
   if (row.inventoryId) {
     if (current.inventoryId !== row.inventoryId || !current.inventoryActive) return "Запись Inventory отсутствует или была деактивирована.";
     if (canonicalDate(current.inventoryUpdatedAt!) !== canonicalDate(row.snapshotUpdatedAt)) return "Inventory изменён после экспорта.";
-    if (snapshotPrice(current.price) !== snapshotPrice(row.originalPrice) || current.availability !== row.originalAvailability) return "Исходные значения Inventory изменились после экспорта.";
+    if (snapshotPrice(current.price) !== snapshotPrice(row.originalPrice) || availabilitySnapshot(current) !== row.originalAvailability) return "Исходные значения Inventory изменились после экспорта.";
   } else {
     if (current.inventoryId) return current.inventoryActive ? "После экспорта для города появилась запись Inventory." : "Для варианта есть скрытая неактивная запись Inventory; импорт не будет её активировать.";
     if (canonicalDate(current.sourceUpdatedAt) !== canonicalDate(row.snapshotUpdatedAt)) return "Товар или вариант изменён после экспорта.";
@@ -354,7 +347,7 @@ export async function previewPriceImport(session: ImportSession, buffer: Buffer,
   return {
     token,
     counts: { total: rows.length, changed: changedCount, unchanged: rows.filter((row) => !row.changes.length && !row.errors.length).length, errors: errorCount },
-    rows: rows.map((row) => ({ rowNumber: row.rowNumber, productName: row.productName, sku: row.sku, originalPrice: row.originalPrice, price: row.price, originalAvailability: availabilityLabel[row.originalAvailability ?? ""] ?? (row.originalAvailability === "UNSPECIFIED" ? "Не указана" : ""), availability: availabilityLabel[row.availability ?? ""] ?? (row.availability === "UNSPECIFIED" ? "Не указана" : ""), changed: row.changes.length > 0, errors: row.errors, warnings: row.warnings })),
+    rows: rows.map((row) => ({ rowNumber: row.rowNumber, productName: row.productName, sku: row.sku, originalPrice: row.originalPrice, price: row.price, originalAvailability: availabilityLabelFromSnapshot(row.originalAvailability), availability: availabilityLabelFromSnapshot(row.availability), changed: row.changes.length > 0, errors: row.errors, warnings: row.warnings })),
   };
 }
 
@@ -400,14 +393,18 @@ export async function confirmPriceImport(session: ImportSession, previewToken: s
       const current = currentByVariant.get(row.variantId)!;
       const nextPrice = row.changes.includes("price") ? row.price : snapshotPrice(current.price);
       const calculatedOldPrice = calculateOldPrice(nextPrice);
+      const availabilityChanged = row.changes.includes("availability");
+      const nextAvailability = availabilityChanged
+        ? inventoryTupleForAvailability(row.availability as ApprovedAvailability)
+        : { availability: current.availability ?? "UNSPECIFIED", allowPreorder: current.allowPreorder ?? false, deliveryTime: current.deliveryTime };
       if (row.inventoryId) {
-        const clearPreorder = row.availability === "OUT_OF_STOCK";
         const result = await tx.$queryRaw<CurrentRow[]>(Prisma.sql`
           UPDATE inventory SET
             price=CASE WHEN ${row.changes.includes("price")} THEN ${row.price}::numeric ELSE price END,
             "oldPrice"=CASE WHEN ${row.changes.includes("price")} THEN ${calculatedOldPrice}::numeric ELSE "oldPrice" END,
-            availability=CASE WHEN ${row.changes.includes("availability")} THEN ${row.availability}::"AvailabilityStatus" ELSE availability END,
-            "allowPreorder"=CASE WHEN ${clearPreorder} THEN FALSE ELSE "allowPreorder" END,
+            availability=CASE WHEN ${availabilityChanged} THEN ${nextAvailability.availability}::"AvailabilityStatus" ELSE availability END,
+            "allowPreorder"=CASE WHEN ${availabilityChanged} THEN ${nextAvailability.allowPreorder} ELSE "allowPreorder" END,
+            "deliveryTime"=CASE WHEN ${availabilityChanged} THEN ${nextAvailability.deliveryTime} ELSE "deliveryTime" END,
             "updatedAt"=NOW()
           WHERE id=${row.inventoryId} AND "cityId"=${payload.cityId} AND "isActive"=TRUE AND "updatedAt"=${row.snapshotUpdatedAt}::timestamptz
           RETURNING id AS "inventoryId", "variantId", "cityId", price::text AS price, "oldPrice"::text AS "oldPrice", stock,
@@ -418,8 +415,8 @@ export async function confirmPriceImport(session: ImportSession, previewToken: s
         await auditInventoryChanges(tx, session, [auditRow(current, payload.cityId)], [auditRow(after, payload.cityId)]);
       } else {
         const inserted = await tx.$queryRaw<CurrentRow[]>(Prisma.sql`
-          INSERT INTO inventory (id,"variantId","cityId",price,"oldPrice",availability,"allowPreorder","isActive","updatedAt")
-          VALUES (${newId()},${row.variantId},${payload.cityId},${row.price},${calculateOldPrice(row.price)},${row.availability ?? "UNSPECIFIED"}::"AvailabilityStatus",FALSE,TRUE,NOW())
+          INSERT INTO inventory (id,"variantId","cityId",price,"oldPrice",availability,"allowPreorder","deliveryTime","isActive","updatedAt")
+          VALUES (${newId()},${row.variantId},${payload.cityId},${row.price},${calculateOldPrice(row.price)},${nextAvailability.availability}::"AvailabilityStatus",${nextAvailability.allowPreorder},${nextAvailability.deliveryTime},TRUE,NOW())
           RETURNING id AS "inventoryId", "variantId", "cityId", price::text AS price, "oldPrice"::text AS "oldPrice", stock,
             availability::text AS availability, "allowPreorder", "deliveryTime", "isActive" AS "inventoryActive"
         `);

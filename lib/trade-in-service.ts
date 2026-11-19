@@ -128,7 +128,7 @@ export async function updateTradeInStatus(viewer: TradeInViewer, requestNumber: 
 }
 
 export async function deleteTradeInLead(viewer: TradeInViewer, requestNumber: string, expectedType: LeadRequestType) {
-  if (viewer.role !== "OWNER" && viewer.role !== "ADMIN") throw new Error("FORBIDDEN");
+  if (!["OWNER", "ADMIN", "DEVELOPER"].includes(viewer.role)) throw new Error("FORBIDDEN");
   const client = db();
   const photoUrls = await client.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string; cityId: string; encryptedPiiPayload: string }>>`

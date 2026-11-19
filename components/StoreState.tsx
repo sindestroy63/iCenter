@@ -15,6 +15,7 @@ export type StoreCartItem = {
   price?: number | null;
   city?: string;
   availability?: "IN_STOCK" | "PREORDER" | "OUT_OF_STOCK" | "UNSPECIFIED";
+  deliveryTime?: string | null;
   priceCity?: string;
 };
 
@@ -188,15 +189,15 @@ export function StoreStateProvider({ children }: { children: React.ReactNode }) 
       try {
         const response = await fetch(`/api/catalog/products/${encodeURIComponent(item.slug)}?city=${encodeURIComponent(city)}`, { signal: controller.signal, cache: "no-store" });
         if (!response.ok) throw new Error("Product refresh failed");
-        const body = await response.json() as { data?: { id: string; name: string; brand?: { slug: string }; images?: { src: string | null; colorId: string | null }[]; variants?: { id: string; label: string; attributes?: Record<string, unknown>; color?: { id: string; name: string } | null; price: string | null; availability: StoreCartItem["availability"] }[] } };
+        const body = await response.json() as { data?: { id: string; name: string; brand?: { slug: string }; images?: { src: string | null; colorId: string | null }[]; variants?: { id: string; label: string; attributes?: Record<string, unknown>; color?: { id: string; name: string } | null; price: string | null; availability: StoreCartItem["availability"]; deliveryTime?: string | null }[] } };
         const variant = body.data?.variants?.find((entry) => entry.id === item.variantId);
         if (!body.data || !variant) throw new Error("Cart variant is unavailable");
         const image = body.data.images?.find((entry) => entry.colorId === variant.color?.id)?.src ?? body.data.images?.[0]?.src ?? item.image;
         const fallbackLabel = body.data.brand?.slug === "dyson" && !variant.color ? null : variant.label;
         const details = formatCartVariantDetails(variant.color ? catalogColorDetails(variant.color) : null, variant.attributes, fallbackLabel);
-        return { ...item, name: body.data.name, image: image ?? "", details, productId: body.data.id, city, priceCity: city, price: variant.price === null ? null : Number(variant.price), availability: variant.availability };
+        return { ...item, name: body.data.name, image: image ?? "", details, productId: body.data.id, city, priceCity: city, price: variant.price === null ? null : Number(variant.price), availability: variant.availability, deliveryTime: variant.deliveryTime };
       } catch {
-        return { ...item, productId: undefined, city, priceCity: city, price: null, availability: "UNSPECIFIED" as const };
+        return { ...item, productId: undefined, city, priceCity: city, price: null, availability: "UNSPECIFIED" as const, deliveryTime: null };
       }
     })).then((refreshed) => {
       if (controller.signal.aborted) return;
@@ -204,9 +205,9 @@ export function StoreStateProvider({ children }: { children: React.ReactNode }) 
         let changed = false;
         const updated = current.map((item) => {
         const next = refreshed.find((entry) => entry.variantId === item.variantId);
-        if (!next || (item.productId === next.productId && item.name === next.name && item.image === next.image && item.details === next.details && item.city === next.city && item.priceCity === next.priceCity && item.price === next.price && item.availability === next.availability)) return item;
+        if (!next || (item.productId === next.productId && item.name === next.name && item.image === next.image && item.details === next.details && item.city === next.city && item.priceCity === next.priceCity && item.price === next.price && item.availability === next.availability && item.deliveryTime === next.deliveryTime)) return item;
         changed = true;
-        return { ...item, productId: next.productId, name: next.name, image: next.image, details: next.details, city: next.city, priceCity: next.priceCity, price: next.price, availability: next.availability };
+        return { ...item, productId: next.productId, name: next.name, image: next.image, details: next.details, city: next.city, priceCity: next.priceCity, price: next.price, availability: next.availability, deliveryTime: next.deliveryTime };
         });
         return changed ? updated : current;
       });

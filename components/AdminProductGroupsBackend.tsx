@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, LoaderCircle, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { productSlugBase } from "@/lib/product-slug";
+import { availabilityLabel } from "@/lib/inventory-availability";
 
 type Group = { id: string; slug: string; title: string; description: string; isActive: boolean; sortOrder: number; manualCount: number; variantCount: number; ruleCount: number };
 type Variant = { id: string; productId: string; sku: string; label: string | null; storage: string | null; ram: string | null; simType: string | null; connectivity: string | null; size: string | null; material: string | null; attributes: Record<string, unknown> | null; price: string | null; oldPrice: string | null; availability: string | null; allowPreorder: boolean; deliveryTime: string | null };
@@ -27,7 +28,7 @@ function characteristics(variant: Variant) {
   return values.join(" · ") || "Стандартный вариант";
 }
 function price(value: string | null) { const amount = Number(value); return Number.isFinite(amount) ? new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(amount) : "Цена не указана"; }
-function availability(value: string | null, allowPreorder: boolean) { if (value === "IN_STOCK") return "В наличии"; if (value === "PREORDER" || allowPreorder) return "Предзаказ"; if (value === "OUT_OF_STOCK") return "Нет в наличии"; return "Доступность не указана"; }
+function availability(value: string | null, allowPreorder: boolean, deliveryTime: string | null = null) { return availabilityLabel({ availability: value, allowPreorder, deliveryTime }); }
 
 export default function AdminProductGroupsBackend() {
   const [groups, setGroups] = useState<Group[]>([]);

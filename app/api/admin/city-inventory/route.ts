@@ -5,6 +5,7 @@ import { authErrorStatus, requireAdminMutation, requireAdminSession } from "@/li
 import { getCityAccess } from "@/lib/admin-city-access";
 import { auditInventoryChanges, type InventoryAuditRow } from "@/lib/admin-audit";
 import { calculateOldPrice } from "@/lib/product-price";
+import { APPROVED_AVAILABILITY, approvedAvailability, inventoryTupleForAvailability } from "@/lib/inventory-availability";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,10 @@ const updateSchema = z.object({
   price: z.number().int().nonnegative().nullable().optional(),
   stock: z.number().int().nonnegative().nullable().optional(),
   availability: z.enum(["UNSPECIFIED", "IN_STOCK", "PREORDER", "OUT_OF_STOCK"]).optional(),
-}).strict().refine((value) => value.price !== undefined || value.stock !== undefined || value.availability !== undefined);
+  availabilityState: z.enum(Object.keys(APPROVED_AVAILABILITY) as [keyof typeof APPROVED_AVAILABILITY, ...(keyof typeof APPROVED_AVAILABILITY)[]]).optional(),
+}).strict()
+  .refine((value) => value.price !== undefined || value.stock !== undefined || value.availability !== undefined || value.availabilityState !== undefined)
+  .refine((value) => !(value.availability !== undefined && value.availabilityState !== undefined));
 
 function failure(error: unknown) {
   const status = authErrorStatus(error);
@@ -29,7 +33,7 @@ export async function GET() {
       ? await db.$queryRaw<any[]>`
           SELECT p.id AS "productId",p.name AS "productName",v.id AS "variantId",v.sku,v.label,
             i.id AS "inventoryId",i."cityId",c.name AS "cityName",i.price::text AS price,i.stock,
-            i.availability::text AS availability,
+            i.availability::text AS availability,i."allowPreorder",i."deliveryTime",
             CASE WHEN COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE) THEN COALESCE((to_jsonb(u)->>'allCitiesCanManagePrices')::boolean,FALSE) ELSE COALESCE(g."canManagePrices",FALSE) END AS "canManagePrices",
             CASE WHEN COALESCE((to_jsonb(u)->>'allCities')::boolean,FALSE) THEN COALESCE((to_jsonb(u)->>'allCitiesCanManageStock')::boolean,FALSE) ELSE COALESCE(g."canManageStock",FALSE) END AS "canManageStock"
           FROM users u
@@ -45,12 +49,12 @@ export async function GET() {
       : await db.$queryRaw<any[]>`
           SELECT p.id AS "productId",p.name AS "productName",v.id AS "variantId",v.sku,v.label,
             i.id AS "inventoryId",i."cityId",c.name AS "cityName",i.price::text AS price,i.stock,
-            i.availability::text AS availability,TRUE AS "canManagePrices",TRUE AS "canManageStock"
+            i.availability::text AS availability,i."allowPreorder",i."deliveryTime",TRUE AS "canManagePrices",TRUE AS "canManageStock"
           FROM inventory i JOIN cities c ON c.id=i."cityId" AND c."isActive"=TRUE
           JOIN product_variants v ON v.id=i."variantId" AND v."isActive"=TRUE
           JOIN products p ON p.id=v."productId" ORDER BY c.name,p.name,v.sku
         `;
-    return NextResponse.json({ data: rows.map((row) => ({ ...row, price: row.price == null ? null : Number(row.price), stock: row.stock == null ? null : Number(row.stock) })) }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json({ data: rows.map((row) => ({ ...row, availabilityState: approvedAvailability(row), price: row.price == null ? null : Number(row.price), stock: row.stock == null ? null : Number(row.stock) })) }, { headers: { "cache-control": "no-store" } });
   } catch (error) { return failure(error); }
 }
 
@@ -66,12 +70,16 @@ export async function PATCH(request: Request) {
       if (!grant.allowed) throw new Error("FORBIDDEN");
       if (value.price !== undefined && !grant.canManagePrices) throw new Error("FORBIDDEN");
       if (value.stock !== undefined && !grant.canManageStock) throw new Error("FORBIDDEN");
-      if (value.availability !== undefined && !grant.canManagePrices) throw new Error("FORBIDDEN");
+      if ((value.availability !== undefined || value.availabilityState !== undefined) && !grant.canManagePrices) throw new Error("FORBIDDEN");
       const item = await tx.$queryRaw<InventoryAuditRow[]>`SELECT i.id,i."variantId",i."cityId",v."productId",i.price::text AS price,i."oldPrice"::text AS "oldPrice",i.stock,i.availability::text AS availability,i."allowPreorder",i."deliveryTime",i."isActive" FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i."variantId"=${value.variantId} AND i."cityId"=${value.cityId} AND i."isActive"=TRUE AND v."isActive"=TRUE LIMIT 1 FOR UPDATE OF i`;
       if (!item.length) throw new Error("NOT_FOUND");
       if (value.price !== undefined) await tx.$executeRaw`UPDATE inventory SET price=${value.price},"oldPrice"=${calculateOldPrice(value.price)},"updatedAt"=NOW() WHERE id=${item[0].id}`;
       if (value.stock !== undefined) await tx.$executeRaw`UPDATE inventory SET stock=${value.stock},"updatedAt"=NOW() WHERE id=${item[0].id}`;
       if (value.availability !== undefined) await tx.$executeRaw`UPDATE inventory SET availability=${value.availability}::"AvailabilityStatus","updatedAt"=NOW() WHERE id=${item[0].id}`;
+      if (value.availabilityState !== undefined) {
+        const next = inventoryTupleForAvailability(value.availabilityState);
+        await tx.$executeRaw`UPDATE inventory SET availability=${next.availability}::"AvailabilityStatus","allowPreorder"=${next.allowPreorder},"deliveryTime"=${next.deliveryTime},"updatedAt"=NOW() WHERE id=${item[0].id}`;
+      }
       const after = await tx.$queryRaw<InventoryAuditRow[]>`SELECT i.id,i."variantId",i."cityId",v."productId",i.price::text AS price,i."oldPrice"::text AS "oldPrice",i.stock,i.availability::text AS availability,i."allowPreorder",i."deliveryTime",i."isActive" FROM inventory i JOIN product_variants v ON v.id=i."variantId" WHERE i.id=${item[0].id}`;
       await auditInventoryChanges(tx, session, item, after);
     });
