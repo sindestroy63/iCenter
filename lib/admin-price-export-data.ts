@@ -57,7 +57,7 @@ export async function getPriceExportData(session: ExportSession, filters: { city
       b.name AS "brandName",c.name AS "categoryName",p.name AS "productName",
       g."canonicalKey" AS "productTypeKey",g.name AS "productTypeName",v.sku,v.storage,
       COALESCE(NULLIF(to_jsonb(color)->>'nameRu',''),color.name) AS "colorName",
-      v."simType",v.ram,v.connectivity,v.size,v.material,v.label,v.attributes,
+      v."simType",v.ram,v.connectivity,v.size,v.material,v.label,v.attributes,resolved_attributes.attributes AS "resolvedAttributes",
       i.price::text AS price,i.availability::text AS availability
     FROM products p
     JOIN brands b ON b.id=p."brandId" AND b."isActive"=TRUE
@@ -65,6 +65,16 @@ export async function getPriceExportData(session: ExportSession, filters: { city
     JOIN global_product_types g ON g.id=p."globalProductTypeId" AND g."isActive"=TRUE
     JOIN product_variants v ON v."productId"=p.id AND v."isActive"=TRUE
     LEFT JOIN colors color ON color.id=v."colorId"
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(jsonb_build_object('code',resolved.code,'name',resolved.name,'value',resolved.value) ORDER BY resolved."sortOrder",resolved.name) AS attributes
+      FROM (
+        SELECT d.code,d.name,o.label AS value,d."sortOrder"
+        FROM product_variant_attribute_values pav
+        JOIN attribute_definitions d ON d.id=pav."definitionId"
+        JOIN attribute_options o ON o.id=pav."optionId"
+        WHERE pav."variantId"=v.id
+      ) resolved
+    ) resolved_attributes ON TRUE
     LEFT JOIN inventory i ON i."variantId"=v.id AND i."cityId"=${city.id} AND i."isActive"=TRUE
     WHERE p.status='PUBLISHED'::"ProductStatus"
       AND (${filters.brandId ?? null}::text IS NULL OR p."brandId"=${filters.brandId ?? null})

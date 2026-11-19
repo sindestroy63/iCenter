@@ -26,9 +26,11 @@ export function normalizeCatalogSearchQuery(value: string) {
 }
 
 function capacityAliases(token: string) {
-  const match = token.match(/^(\d+)gb$/);
+  const match = token.match(/^(\d+)(?:gb)?$/);
   if (!match) return [];
   const gigabytes = Number(match[1]);
+  const commonCapacity = new Set([8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
+  if (!token.endsWith("gb") && !commonCapacity.has(gigabytes)) return [];
   const aliases = [token, `${gigabytes} gb`, `${gigabytes}gb`, `${gigabytes}гб`, `${gigabytes} гб`];
   if (gigabytes % 1024 === 0) {
     const terabytes = gigabytes / 1024;
@@ -56,6 +58,12 @@ const modelFamilies = new Set([
   "ipad", "айпад", "airpods", "аирподс", "эйрподс", "watch", "playstation", "dyson", "marshall",
 ]);
 const modelQualifiers = new Set(["pro", "про", "max", "макс", "plus", "ultra", "air", "mini", "lite", "fe"]);
+const commonCapacities = new Set([8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]);
+
+function isCapacityToken(token: string) {
+  const match = token.match(/^(\d+)(?:gb)?$/);
+  return Boolean(match && commonCapacities.has(Number(match[1])));
+}
 
 export function catalogSearchModelTokenGroups(value: string) {
   const normalized = normalizeCatalogSearchQuery(value);
@@ -63,12 +71,12 @@ export function catalogSearchModelTokenGroups(value: string) {
   const tokens = normalized.split(" ");
   const hasFamily = tokens.some((token) => modelFamilies.has(token));
   const hasQualifier = tokens.some((token) => modelQualifiers.has(token));
-  const hasModelNumber = tokens.some((token) => /^\d{2,4}$/.test(token));
+  const hasModelNumber = tokens.some((token) => /^\d{2,4}$/.test(token) && !isCapacityToken(token));
   const hasModelCode = tokens.some((token) => /^[a-zа-я]{1,3}\d{1,4}$/i.test(token) && !/^a\d+$/i.test(token));
   if (!hasFamily && !(hasQualifier && (hasModelNumber || hasModelCode))) return [];
   return catalogSearchTokenGroups(normalized).filter((_group, index) => {
     const token = tokens[index];
-    return modelFamilies.has(token) || modelQualifiers.has(token) || /^\d{2,4}$/.test(token) || /^[a-zа-я]{1,3}\d{1,4}$/i.test(token);
+    return modelFamilies.has(token) || modelQualifiers.has(token) || (/^\d{2,4}$/.test(token) && !isCapacityToken(token)) || /^[a-zа-я]{1,3}\d{1,4}$/i.test(token);
   });
 }
 
@@ -76,6 +84,9 @@ export function catalogSearchProductIdentityMatches(text: string, query: string)
   const groups = catalogSearchModelTokenGroups(query);
   if (!groups.length) return true;
   const padded = ` ${normalizeCatalogSearchQuery(text)} `;
+  const queryTokens = new Set(normalizeCatalogSearchQuery(query).split(" "));
+  const asksForProWithoutMax = (queryTokens.has("pro") || queryTokens.has("про")) && !queryTokens.has("max") && !queryTokens.has("макс");
+  if (asksForProWithoutMax && (padded.includes(" max ") || padded.includes(" макс "))) return false;
   return groups.every((aliases) => aliases.some((alias) => padded.includes(` ${normalizeCatalogSearchQuery(alias)} `)));
 }
 

@@ -224,6 +224,7 @@ export async function GET(request: Request) {
             )
             AND (${searchCondition})
             AND (${modelSearchTokenGroups.length ? productIdentitySearchCondition(modelSearchTokenGroups, Prisma.sql`p0`, Prisma.sql`b0`) : Prisma.sql`TRUE`})
+            AND (${productIdentityExclusionCondition(normalizedQuery, Prisma.sql`p0`, Prisma.sql`b0`)})
           ORDER BY "searchRank", p0."manualOrder", p0."isNew" DESC, p0.name, p0.id
           LIMIT ${filters.limit} OFFSET ${filters.offset}
         )
@@ -308,14 +309,17 @@ function variantSearchCondition(tokenGroups: string[][], aliases: SearchAliases)
         OR COALESCE(${variant}."simType", '') ILIKE ${pattern} OR COALESCE(${variant}.connectivity, '') ILIKE ${pattern}
         OR COALESCE(${variant}.size, '') ILIKE ${pattern} OR COALESCE(${variant}.material, '') ILIKE ${pattern}
         OR COALESCE(${variant}.attributes::text, '') ILIKE ${pattern}
-        OR COALESCE(${color}.name, '') ILIKE ${pattern} OR COALESCE(to_jsonb(${color})->>'nameRu', '') ILIKE ${pattern}
-        OR COALESCE(${color}.slug, '') ILIKE ${pattern}
+        OR replace(lower(COALESCE(${color}.name, '')), 'ё', 'е') LIKE ${pattern}
+        OR replace(lower(COALESCE(to_jsonb(${color})->>'nameRu', '')), 'ё', 'е') LIKE ${pattern}
+        OR replace(lower(COALESCE(${color}.slug, '')), 'ё', 'е') LIKE ${pattern}
         OR EXISTS (
           SELECT 1 FROM product_variant_attribute_values search_av
           JOIN attribute_options search_ao ON search_ao.id=search_av."optionId"
           LEFT JOIN attribute_option_aliases search_aa ON search_aa."optionId"=search_ao.id
           WHERE search_av."variantId"=${variant}.id
-            AND (search_ao.label ILIKE ${pattern} OR search_ao."canonicalKey" ILIKE ${pattern} OR search_aa."aliasLabel" ILIKE ${pattern})
+            AND (replace(lower(search_ao.label), 'ё', 'е') LIKE ${pattern}
+              OR replace(lower(search_ao."canonicalKey"), 'ё', 'е') LIKE ${pattern}
+              OR replace(lower(COALESCE(search_aa."aliasLabel", '')), 'ё', 'е') LIKE ${pattern})
         )`;
     }), " OR ")}
   )`), " AND ");
@@ -324,6 +328,14 @@ function variantSearchCondition(tokenGroups: string[][], aliases: SearchAliases)
 function productIdentitySearchCondition(tokenGroups: string[][], product: Prisma.Sql, brand: Prisma.Sql) {
   const identity = Prisma.sql`concat(' ', regexp_replace(lower(concat_ws(' ', ${brand}.name, ${product}.name, ${product}.model, ${product}.generation)), '[^a-zа-яё0-9]+', ' ', 'g'), ' ')`;
   return Prisma.join(tokenGroups.map((group) => Prisma.sql`(${Prisma.join(group.map((alias) => Prisma.sql`${identity} LIKE ${`% ${normalizeCatalogSearchQuery(alias)} %`}`), " OR ")})`), " AND ");
+}
+
+function productIdentityExclusionCondition(query: string, product: Prisma.Sql, brand: Prisma.Sql) {
+  const tokens = new Set(normalizeCatalogSearchQuery(query).split(" "));
+  const asksForProWithoutMax = (tokens.has("pro") || tokens.has("про")) && !tokens.has("max") && !tokens.has("макс");
+  if (!asksForProWithoutMax) return Prisma.sql`TRUE`;
+  const identity = Prisma.sql`concat(' ', regexp_replace(replace(lower(concat_ws(' ', ${brand}.name, ${product}.name, ${product}.model, ${product}.generation)), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g'), ' ')`;
+  return Prisma.sql`${identity} NOT LIKE '% max %' AND ${identity} NOT LIKE '% макс %'`;
 }
 
 function groupProducts(rows: ProductRow[], city: City, dictionaryRows: VariantDictionaryRow[]) {

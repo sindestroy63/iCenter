@@ -26,6 +26,7 @@ export type PriceExportRow = {
   material: string | null;
   label: string | null;
   attributes: unknown;
+  resolvedAttributes?: unknown;
   price: string | null;
   availability: string | null;
 };
@@ -162,19 +163,53 @@ function attributeValues(value: unknown) {
     .filter(Boolean);
 }
 
+type ResolvedAttribute = { code: string; name: string; value: string };
+
+function resolvedAttributeValues(value: unknown) {
+  if (!Array.isArray(value)) return [] as ResolvedAttribute[];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    const code = text(record.code);
+    const name = text(record.name);
+    const resolvedValue = text(record.value);
+    return code && name && resolvedValue ? [{ code, name, value: resolvedValue }] : [];
+  });
+}
+
+function technicalIdentifier(value: string) {
+  return /^c[a-z0-9]{20,}$/i.test(value) || /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value);
+}
+
 export function otherCharacteristics(row: PriceExportRow) {
+  const excludedCodes = new Set(["storage", "memory", "color", "colorname", "sim", "simtype", "ram", "connectivity"]);
+  const resolved = resolvedAttributeValues(row.resolvedAttributes)
+    .filter((entry) => !excludedCodes.has(comparable(entry.code)))
+    .map((entry) => `${entry.name}: ${entry.value}`);
+  const resolvedCodes = new Set(resolvedAttributeValues(row.resolvedAttributes).map((entry) => comparable(entry.code)));
   const known = [row.storage, row.colorName, row.simType, row.ram, row.connectivity, row.size, row.material]
     .map(comparable)
     .filter(Boolean);
-  const parts = text(row.label).split(/\s*[•,;]\s*/).map(text).filter(Boolean);
+  const parts = text(row.label).split(/\s*[•,;]\s*/).map(text).filter((part) => part && !technicalIdentifier(part));
   const labelParts = parts.filter((part) => {
     const normalized = comparable(part);
     const memory = storageMegabytes(part);
     return !known.some((value) => value === normalized)
       && !(Number.isFinite(memory) && known.some((value) => storageMegabytes(value) === memory));
   });
-  const values = [...labelParts, ...attributeValues(row.attributes)];
-  return excelSafeText(Array.from(new Set(values.map(text).filter(Boolean))).join(" · "));
+  const legacyValues = row.attributes && typeof row.attributes === "object" && !Array.isArray(row.attributes)
+    ? Object.entries(row.attributes as Record<string, unknown>)
+      .filter(([code]) => !excludedCodes.has(comparable(code)) && !resolvedCodes.has(comparable(code)))
+      .flatMap(([code, value]) => {
+        const values = Array.isArray(value) ? value.map(text) : [text(value)];
+        const name = code.replace(/([a-zа-яё0-9])([A-ZА-ЯЁ])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
+        const label = name ? name.charAt(0).toLocaleUpperCase("ru-RU") + name.slice(1) : "";
+        return values.filter((item) => item && !technicalIdentifier(item)).map((item) => `${label}: ${item}`);
+      })
+    : attributeValues(row.attributes).filter((value) => !technicalIdentifier(value));
+  const fallback = [row.size ? `Размер: ${text(row.size)}` : "", row.material ? `Материал: ${text(row.material)}` : ""];
+  const values = [...resolved, ...fallback, ...labelParts, ...legacyValues];
+  return excelSafeText(Array.from(new Set(values.map(text).filter(Boolean))).join("; "));
 }
 
 function decimal(value: string | null) {

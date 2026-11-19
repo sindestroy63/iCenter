@@ -38,7 +38,9 @@ function SortButton({ label, sortKey, sort, onSort }: { label: string; sortKey: 
 
 export default function AdminRequestsBackend() {
   const admin = useContext(AdminUserContext);
-  const canDelete = admin?.user?.role === "OWNER" || admin?.user?.role === "ADMIN";
+  const contextCanDelete = admin?.user?.role === "OWNER" || admin?.user?.role === "ADMIN";
+  const [apiCanDelete, setApiCanDelete] = useState(false);
+  const canDelete = apiCanDelete || contextCanDelete;
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [tradeInRows, setTradeInRows] = useState<TradeInRow[]>([]);
   const [requestType,setRequestType]=useState<"cart"|"trade_in"|"installment">("cart");
@@ -60,6 +62,7 @@ export default function AdminRequestsBackend() {
       const response=await fetch(`/api/admin/requests?type=${type}`,{cache:"no-store"});
       const payload=await response.json();
       if(!response.ok) throw new Error(payload.error??"REQUESTS_UNAVAILABLE");
+      setApiCanDelete(payload.permissions?.canDelete === true);
       if(type==="trade_in" || type==="installment") setTradeInRows(payload.data); else setRows(payload.data);
     } catch { setError("Не удалось загрузить заявки."); }
     finally { setLoading(false); }
@@ -70,7 +73,7 @@ export default function AdminRequestsBackend() {
     fetch("/api/admin/requests", { cache: "no-store" }).then(async (response) => {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "Не удалось загрузить заявки.");
-      if (active) setRows(payload.data);
+      if (active) { setRows(payload.data); setApiCanDelete(payload.permissions?.canDelete === true); }
     }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "Не удалось загрузить заявки."); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []);
