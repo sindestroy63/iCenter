@@ -222,6 +222,7 @@ function snapshotTime(value: Date | string) {
 }
 
 export function priceExportRowSignature(row: Pick<PriceExportRow, "productId" | "variantId" | "cityId" | "inventoryId" | "snapshotUpdatedAt" | "price" | "availability">, exportId: string, signingKey: string) {
+  const price = row.price === null ? null : Number(row.price);
   const payload = JSON.stringify([
     PRICE_EXPORT_FORMAT_ID,
     PRICE_EXPORT_FORMAT_VERSION,
@@ -231,7 +232,7 @@ export function priceExportRowSignature(row: Pick<PriceExportRow, "productId" | 
     row.cityId,
     row.inventoryId,
     snapshotTime(row.snapshotUpdatedAt),
-    row.price,
+    Number.isSafeInteger(price) ? price : row.price,
     row.availability,
   ]);
   return createHmac("sha256", signingKey).update(payload).digest("base64url");

@@ -96,7 +96,7 @@ function cellValue(cell: ExcelJS.Cell) {
 }
 
 function stringValue(value: ExcelJS.CellValue | null | undefined) {
-  return typeof value === "string" ? value.trim() : "";
+  return typeof value === "string" ? value.trim() : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
 }
 
 function integerPrice(value: unknown): number | null {

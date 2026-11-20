@@ -35,6 +35,7 @@ async function isCustomDefinition(code: string) {
 
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "DICTIONARY_FAILED";
+  if (message.startsWith("DUPLICATE_KEY:")) return NextResponse.json({ error: message.slice("DUPLICATE_KEY:".length) }, { status: 409 });
   const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
   const databaseCode = error && typeof error === "object" && "meta" in error && (error as { meta?: unknown }).meta && typeof (error as { meta: object }).meta === "object" && "code" in (error as { meta: { code?: unknown } }).meta ? String((error as { meta: { code?: unknown } }).meta.code ?? "") : "";
   if ([code, databaseCode].some((value) => ["42P01", "42703"].includes(value))) return NextResponse.json({ error: "DICTIONARY_MIGRATION_REQUIRED" }, { status: 503 });
@@ -162,7 +163,14 @@ export async function POST(request: Request) {
       if (!definition.length) throw new Error("UNKNOWN_DICTIONARY");
       const existing = await tx.$queryRaw<any[]>`SELECT d.code AS dictionary,o."canonicalKey" AS key,o.id AS "optionId" FROM attribute_options o JOIN attribute_definitions d ON d.id=o."definitionId" UNION ALL SELECT d.code,a."aliasKey",a.id FROM attribute_option_aliases a JOIN attribute_definitions d ON d.id=a."definitionId"`;
       const issues = validateOptionInput({ dictionary: code as any, canonicalKey: value.canonicalKey, label: value.label, aliases: value.aliases }, existing);
-      if (issues.length) throw new Error(issues[0].code);
+      if (issues.length) {
+        const issue = issues[0];
+        if (issue.code === "DUPLICATE_KEY" || issue.code === "DUPLICATE_ALIAS") {
+          const conflict = await tx.$queryRaw<any[]>`SELECT o.label,o."canonicalKey" FROM attribute_options o LEFT JOIN attribute_option_aliases a ON a."optionId"=o.id WHERE o.id=${issue.conflictsWith ?? ""} OR a.id=${issue.conflictsWith ?? ""} LIMIT 1`;
+          throw new Error(`DUPLICATE_KEY:Ключ «${issue.value}» уже занят значением «${conflict[0]?.label ?? "неизвестное значение"}» (${conflict[0]?.canonicalKey ?? "ключ недоступен"}).`);
+        }
+        throw new Error(issue.code);
+      }
       const optionId = value.id ?? newId();
       await tx.$executeRaw`INSERT INTO attribute_options (id,"definitionId","canonicalKey",label,"sortOrder","isActive") VALUES (${optionId},${definition[0].id},${value.canonicalKey},${value.label},${value.sortOrder},${value.isActive})`;
       for (let index = 0; index < value.aliases.length; index++) { const alias = value.aliases[index]; await tx.$executeRaw`INSERT INTO attribute_option_aliases (id,"definitionId","optionId","aliasKey","aliasLabel") VALUES (${newId()},${definition[0].id},${optionId},${`${code}:${alias.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `alias-${index + 1}`}`},${alias})`; }

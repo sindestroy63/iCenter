@@ -68,7 +68,7 @@ async function syncDictionaryLinks(
     const applicable = await tx.$queryRaw<
       any[]
     >`SELECT 1 FROM global_product_type_attributes WHERE "productTypeId"=${product.globalProductTypeId} AND "definitionId"=${definition.id} AND scope=${scope} LIMIT 1`;
-    if (!applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
+    if (scope === "PRODUCT" && !applicable.length) throw new Error("ATTRIBUTE_NOT_APPLICABLE");
     if (scope === "PRODUCT")
       await tx.$executeRaw`INSERT INTO product_attribute_values ("productId","definitionId","optionId") VALUES (${ownerId},${definition.id},${optionId}) ON CONFLICT ("productId","definitionId") DO UPDATE SET "optionId"=EXCLUDED."optionId","updatedAt"=NOW()`;
     else
@@ -359,6 +359,10 @@ function validationMessage(error: z.ZodError) {
 }
 
 function mutationFailure(error: unknown, action: "create" | "update" | "delete") {
+  if (error instanceof Error && error.message.startsWith("VARIANT_IN_USE:"))
+    return { status: 409, message: error.message.slice("VARIANT_IN_USE:".length) };
+  if (error instanceof Error && error.message === "LAST_VARIANT")
+    return { status: 409, message: "Нельзя удалить последний вариант товара." };
   if (error instanceof Error && error.message === "INVALID_RELATED_PRODUCTS")
     return { status: 400, message: "INVALID_RELATED_PRODUCTS" };
   if (
@@ -961,6 +965,41 @@ export async function DELETE(request: Request) {
   try {
     const session = await requireGlobalAdminMutation(request);
     const requestUrl = new URL(request.url);
+    const variantId = requestUrl.searchParams.get("variantId")?.trim();
+    const variantProductId = requestUrl.searchParams.get("productId")?.trim();
+    if (variantId || variantProductId) {
+      if (!variantId || !variantProductId) return NextResponse.json({ error: "Не указан вариант или товар." }, { status: 400 });
+      await adminDb().$transaction(async (tx) => {
+        const variants = await tx.$queryRaw<any[]>`SELECT id,sku,label,"isActive" FROM product_variants WHERE id=${variantId} AND "productId"=${variantProductId} FOR UPDATE`;
+        if (!variants.length) throw new Error("Вариант не найден или уже удалён.");
+        const count = await tx.$queryRaw<any[]>`SELECT COUNT(*)::int AS count FROM product_variants WHERE "productId"=${variantProductId}`;
+        if (Number(count[0]?.count) <= 1) throw new Error("LAST_VARIANT");
+        const dependencies = await tx.$queryRaw<any[]>`SELECT CASE
+          WHEN EXISTS (SELECT 1 FROM order_items WHERE "variantId"=${variantId}) THEN 'заказах'
+          WHEN EXISTS (SELECT 1 FROM request_items WHERE "variantId"=${variantId}) THEN 'заявках'
+          WHEN EXISTS (SELECT 1 FROM best_offers WHERE "variantId"=${variantId}) THEN 'спецпредложении'
+          WHEN EXISTS (SELECT 1 FROM popular_products WHERE "variantId"=${variantId}) THEN 'популярных товарах'
+          WHEN EXISTS (SELECT 1 FROM catalog_group_variants WHERE "variantId"=${variantId}) THEN 'подборках каталога'
+          ELSE NULL END AS source`;
+        let dependency = dependencies[0]?.source as string | null;
+        if (!dependency) {
+          const cityGroupTable = await tx.$queryRaw<any[]>`SELECT to_regclass('public.catalog_group_city_variants') IS NOT NULL AS "isPresent"`;
+          if (cityGroupTable[0]?.isPresent) {
+            const cityGroup = await tx.$queryRaw<any[]>`SELECT 1 FROM catalog_group_city_variants WHERE "variantId"=${variantId} LIMIT 1`;
+            if (cityGroup.length) dependency = "городских подборках каталога";
+          }
+        }
+        if (dependency) throw new Error(`VARIANT_IN_USE:Вариант «${variants[0].label}» (SKU ${variants[0].sku}) используется в ${dependency}. Уберите связь или оставьте вариант неактивным.`);
+        await tx.$executeRaw`DELETE FROM inventory WHERE "variantId"=${variantId}`;
+        await tx.$executeRaw`DELETE FROM product_variant_attribute_values WHERE "variantId"=${variantId}`;
+        await tx.$executeRaw`DELETE FROM product_variants WHERE id=${variantId} AND "productId"=${variantProductId}`;
+        await writeAuditLog(tx, session, {
+          action: "product_variant.deleted", entityType: "product_variant", entityId: variantId,
+          changes: { deleted: { old: variants[0], new: null } }, metadata: { productId: variantProductId, sku: variants[0].sku },
+        });
+      }, { maxWait: 10000, timeout: 30000 });
+      return NextResponse.json({ ok: true });
+    }
     const scope = requestUrl.searchParams.get("scope") === "used" ? "used" : "new";
     let productId = requestUrl.searchParams.get("id")?.trim() ?? "";
     if (!productId) {

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect,useMemo,useState,type ChangeEvent } from "react";
 import { ArrowDown,ArrowUp,ChevronDown,ChevronLeft,ChevronRight,ChevronUp,ChevronsDown,ChevronsUp,Download,EyeOff,GripVertical,ImagePlus,ListOrdered,Plus,Save,Search,Trash2,Upload,X } from "lucide-react";
-import { compareMemoryValues,dictionaryValuesMatch,DICTIONARY_REGISTRY,classifyProductType,isAttributeApplicable,type DictionaryCode,type ProductTypeCode } from "@/lib/product-dictionaries";
+import { compareMemoryValues,dictionaryValuesMatch,classifyProductType,type ProductTypeCode } from "@/lib/product-dictionaries";
 import { productSlugBase } from "@/lib/product-slug";
 import { adminVariantFieldValue,type AdminVariantFieldCode } from "@/lib/admin-variant-fields";
 import { moveProductOrder,productOrderChanged,productOrderSaveErrorMessage } from "@/lib/product-manual-order";
@@ -497,7 +497,23 @@ const activeType=payload?.options.types.find((item) => item.id===editing?.global
       if(event.target===event.currentTarget)
         closeEditor();
     }}>
-      <ProductEditor title={editing.id?(tradeInMode?"Редактирование б/у товара":"Редактирование товара"):(tradeInMode?"Новый б/у товар":"Новый товар")} editing={editing} payload={payload} media={media} activeTab={tab} setActiveTab={setTab} selectedVariant={selectedVariant} setSelectedVariant={setSelectedVariant} activeType={activeType} dirty={dirty} error={formError} busy={busy} setField={setField} setVariantField={setVariantField} setInventoryField={setInventoryField} setImageField={setImageField} addVariant={() => { update({ variants: [...editing.variants,emptyVariant()] }); setSelectedVariant(editing.variants.length); setDirty(true); }} removeVariant={(index) => {
+      <ProductEditor title={editing.id?(tradeInMode?"Редактирование б/у товара":"Редактирование товара"):(tradeInMode?"Новый б/у товар":"Новый товар")} editing={editing} payload={payload} media={media} activeTab={tab} setActiveTab={setTab} selectedVariant={selectedVariant} setSelectedVariant={setSelectedVariant} activeType={activeType} dirty={dirty} error={formError} busy={busy} setField={setField} setVariantField={setVariantField} setInventoryField={setInventoryField} setImageField={setImageField} addVariant={() => { const nextIndex=editing.variants.length; update({ variants: [...editing.variants,emptyVariant()] }); setSelectedVariant(nextIndex); setDirty(true); }} deleteVariant={async (index) => {
+        const variant=editing.variants[index];
+        if(!variant?.id||!editing.id||!window.confirm(`Удалить вариант «${variant.label||"Вариант"}» (SKU ${variant.sku})?`)) return;
+        setBusy(true); setFormError("");
+        try {
+          const csrfValue=csrf();
+          if(!csrfValue) throw new Error("Сессия или CSRF-токен недоступны. Войдите повторно.");
+          const response=await fetch(`/api/admin/products?productId=${encodeURIComponent(editing.id)}&variantId=${encodeURIComponent(variant.id)}`,{ method:"DELETE",headers:{"x-csrf-token":csrfValue} });
+          const result=await response.json().catch(()=>({}));
+          if(!response.ok) throw new Error(result.error||`Не удалось удалить вариант (${response.status}).`);
+          const variants=editing.variants.filter((_,itemIndex)=>itemIndex!==index);
+          setEditing((current)=>current?{...current,variants}:current);
+          setSelectedVariant(Math.max(0,Math.min(selectedVariant,variants.length-1)));
+          await load();
+        } catch(error) { setFormError(error instanceof Error?error.message:"Не удалось удалить вариант."); }
+        finally { setBusy(false); }
+      }} removeVariant={(index) => {
         if(editing.variants[index]?.id)
           return; if(editing.variants.length<2) {
             setFormError("У товара должен остаться хотя бы один вариант.");
@@ -535,6 +551,7 @@ function ProductEditor(props: {
   setInventoryField: (index: number,cityId: string,patch: Partial<Inventory>) => void;
   setImageField: (index: number,patch: Partial<ImageLink>) => void;
   addVariant: () => void;
+  deleteVariant: (index: number) => Promise<void>;
   removeVariant: (index: number) => void;
   makeMainImage: (index: number) => void;
   addImage: (colorId: string|null) => void;
@@ -558,6 +575,7 @@ function ProductEditor(props: {
     }).catch(() => undefined);
     return () => controller.abort();
   },[]);
+  useEffect(() => { setExpandedVariant(null); },[editing.variants.length]);
   const updateVariantAttributes=(variantIndex: number,dictionaryOptionIds: Record<string,string|null>,attributes: Record<string,unknown>,changedCode: string,optionId: string|null) => {
     const field=({ memory: "storage",ram: "ram",sim: "simType",connectivity: "connectivity",size: "size",material: "material" } as Record<string,keyof Variant|undefined>)[changedCode];
     const option=optionId? registeredOptions.find((item) => item.dictionary===changedCode&&item.id===optionId):undefined;
@@ -609,6 +627,7 @@ function ProductEditor(props: {
           <div className="admin-variant-list">{sortedVariants.map(({item,index}) => { const expanded=expandedVariant===index; return <div className={`admin-variant-list-item${expanded?" active":""}`} key={item.id??index}>
             <button type="button" aria-expanded={expanded} onClick={() => { setSelectedVariant(index); setExpandedVariant(expanded?null:index); }}><span><strong>{variantsLabel(item,index)}</strong><small>{item.sku??"Новый вариант"}</small></span><ChevronDown size={17} aria-hidden="true" /></button>
             <span className={`admin-variant-status${item.active?" is-active":""}`} title={item.active?"Активен":"Неактивен"} aria-label={item.active?"Активен":"Неактивен"}/>
+            {item.id&&!tradeInMode&&<button type="button" className="remove" aria-label={`Удалить вариант ${item.sku}`} title="Удалить вариант" disabled={props.busy} onClick={(event)=>{event.stopPropagation();void props.deleteVariant(index);}}><Trash2 size={15}/></button>}
             {!item.id&&<button type="button" className="remove" aria-label="Удалить новый вариант" onClick={() => { if(window.confirm("Удалить новый вариант?")) { props.removeVariant(index); setExpandedVariant(null); } }}><Trash2 size={15}/></button>}
             {expanded&&variant&&<div className="admin-variant-detail">
               <section className="admin-variant-block"><div className="admin-variant-block-head"><div><h4>Характеристики</h4></div></div><div className="admin-variant-core-grid"><label>SKU<input readOnly value={variant.sku??"Создаётся автоматически"}/></label><label className="admin-check"><input type="checkbox" checked={variant.active} onChange={(event)=>props.setVariantField(index,{active:event.target.checked})}/>Вариант активен</label></div><VariantAttributesEditor key={variant.id??index} variant={variant} variantKey={variant.id??index} productTypeKey={props.activeType?.globalTypeKey??""} options={registeredOptions} definitions={registeredDefinitions} colors={payload.options.colors} onColorChange={(colorId)=>props.setVariantField(index,{colorId})} onChange={(dictionaryOptionIds,attributes,changedCode,optionId)=>updateVariantAttributes(index,dictionaryOptionIds,attributes,changedCode,optionId)}/></section>
@@ -661,8 +680,7 @@ function VariantAttributesEditor(props: {
     const selected=selectedId? props.options.find((option) => option.dictionary===code&&option.id===selectedId):undefined;
     return selected&&!active.some((option) => option.id===selected.id)? [selected,...active]:active;
   };
-  const appliesToProductType=(entry: typeof definitions[number])=>entry.productTypeIds?.length?entry.productTypeIds.includes(props.variant.productTypeId??""):DICTIONARY_REGISTRY.some((item)=>item.code===entry.code)?isAttributeApplicable(classifyProductType(props.productTypeKey.split(":").pop()||""),entry.code as DictionaryCode):true;
-  const assignableDefinitions=definitions.filter((entry)=>entry.isActive && entry.canAssign !== false && appliesToProductType(entry));
+  const assignableDefinitions=definitions.filter((entry)=>entry.isActive && entry.canAssign !== false);
   const availableDefinitions=assignableDefinitions.filter((entry)=>props.options.some((option)=>option.dictionary===entry.code&&option.isActive)&&!usedTypes.has(entry.code));
   const updateValue=(code: string,id: string) => {
     const ids={ ...props.variant.dictionaryOptionIds,[code]: id||null };
