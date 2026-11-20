@@ -15,6 +15,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
         DELETE FROM media m WHERE m.id = ${id}
           AND NOT EXISTS (SELECT 1 FROM product_gallery_images p WHERE p."mediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM color_gallery_images c WHERE c."mediaId" = m.id)
+          AND NOT EXISTS (SELECT 1 FROM variant_gallery_images v WHERE v."mediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM banners b WHERE b."imageMediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM brands b WHERE b."logoMediaId" = m.id)
           AND NOT EXISTS (SELECT 1 FROM categories c WHERE c."imageMediaId" = m.id)

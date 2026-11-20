@@ -16,6 +16,7 @@ export async function GET() {
       SELECT m.id, m.filename, m."storagePath", m."mimeType", m."fileSize", m.alt, m."uploadedAt",
         (EXISTS(SELECT 1 FROM product_gallery_images pgi WHERE pgi."mediaId" = m.id)
           OR EXISTS(SELECT 1 FROM color_gallery_images cgi WHERE cgi."mediaId" = m.id)
+          OR EXISTS(SELECT 1 FROM variant_gallery_images vgi WHERE vgi."mediaId" = m.id)
           OR EXISTS(SELECT 1 FROM banners b WHERE b."imageMediaId" = m.id)
           OR EXISTS(SELECT 1 FROM brands b WHERE b."logoMediaId" = m.id)
           OR EXISTS(SELECT 1 FROM categories c WHERE c."imageMediaId" = m.id)

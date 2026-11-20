@@ -32,10 +32,18 @@ export async function saveVariants(tx: any, productId: string, variants: any[]) 
   return savedIds;
 }
 
-export async function saveImages(tx: any, productId: string, images: any[]) {
+export async function saveImages(tx: any, productId: string, images: any[], variantIdsByKey: Map<string, string> = new Map()) {
+  const imageVariantId = (image: any) => {
+    if (image.variantId) return image.variantId as string;
+    if (!image.variantKey) return null;
+    const resolved = variantIdsByKey.get(image.variantKey);
+    if (!resolved) throw new Error("INVALID_VARIANT_IMAGE");
+    return resolved;
+  };
   const galleryKeys = new Set<string>();
   for (const image of images) {
-    const key = `${image.colorId ?? ""}\u0000${image.mediaId}`;
+    const variantId = imageVariantId(image);
+    const key = `${variantId ? `variant:${variantId}` : image.colorId ? `color:${image.colorId}` : "product"}\u0000${image.mediaId}`;
     if (galleryKeys.has(key)) throw new Error("DUPLICATE_IMAGE");
     galleryKeys.add(key);
   }
@@ -43,12 +51,24 @@ export async function saveImages(tx: any, productId: string, images: any[]) {
   if (existing.length !== new Set(images.map(item => item.mediaId)).size) throw new Error("INVALID_MEDIA");
   const colorIds = Array.from(new Set<string>(images.map(item => item.colorId).filter((id: unknown): id is string => typeof id === "string" && id.length > 0)));
   for (const colorId of colorIds) { const found = await tx.$queryRaw<any[]>`SELECT id FROM colors WHERE id=${colorId} AND "isActive"=TRUE`; if (!found.length) throw new Error("INVALID_COLOR"); }
+  const variantIds = Array.from(new Set<string>(images.map(imageVariantId).filter((id: unknown): id is string => typeof id === "string" && id.length > 0)));
+  if (variantIds.length) {
+    const found = await tx.$queryRaw<any[]>`SELECT id FROM product_variants WHERE "productId"=${productId} AND id = ANY(${variantIds}::text[])`;
+    if (found.length !== variantIds.length) throw new Error("INVALID_VARIANT_IMAGE");
+    const schema = await tx.$queryRaw<any[]>`SELECT to_regclass('public.variant_gallery_images') IS NOT NULL AS "isPresent"`;
+    if (!schema[0]?.isPresent) throw new Error("VARIANT_GALLERY_SCHEMA_MISSING");
+  }
+  const variantSchema = await tx.$queryRaw<any[]>`SELECT to_regclass('public.variant_gallery_images') IS NOT NULL AS "isPresent"`;
+  if (variantSchema[0]?.isPresent) await tx.$executeRaw`DELETE FROM variant_gallery_images WHERE "variantId" IN (SELECT id FROM product_variants WHERE "productId"=${productId})`;
   await tx.$executeRaw`DELETE FROM color_gallery_images WHERE "colorGalleryId" IN (SELECT id FROM color_galleries WHERE "productId"=${productId})`;
   await tx.$executeRaw`DELETE FROM color_galleries WHERE "productId"=${productId}`;
   await tx.$executeRaw`DELETE FROM product_gallery_images WHERE "productId"=${productId}`;
   for (let sortOrder = 0; sortOrder < images.length; sortOrder++) {
     const image = images[sortOrder];
-    if (image.colorId) {
+    const variantId = imageVariantId(image);
+    if (variantId) {
+      await tx.$executeRaw`INSERT INTO variant_gallery_images (id,"variantId","mediaId","sortOrder") VALUES (${newId()},${variantId},${image.mediaId},${image.sortOrder ?? sortOrder})`;
+    } else if (image.colorId) {
       const matches = await tx.$queryRaw<any[]>`SELECT id FROM color_galleries WHERE "productId"=${productId} AND "colorId"=${image.colorId} LIMIT 1`;
       const galleryId = matches[0]?.id ?? newId();
       if (!matches.length) await tx.$executeRaw`INSERT INTO color_galleries (id,"productId","colorId","updatedAt") VALUES (${galleryId},${productId},${image.colorId},NOW())`;

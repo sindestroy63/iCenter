@@ -1,6 +1,6 @@
 "use client";
 import { useEffect,useMemo,useState,type ChangeEvent } from "react";
-import { ArrowDown,ArrowUp,ChevronDown,ChevronLeft,ChevronRight,ChevronUp,ChevronsDown,ChevronsUp,Download,EyeOff,GripVertical,ImagePlus,ListOrdered,Plus,Save,Search,Trash2,Upload,X } from "lucide-react";
+import { ArrowDown,ArrowUp,ChevronDown,ChevronLeft,ChevronRight,ChevronUp,ChevronsDown,ChevronsUp,Download,Eye,EyeOff,GripVertical,ImagePlus,ListOrdered,Plus,Save,Search,Trash2,Upload,X } from "lucide-react";
 import { compareMemoryValues,dictionaryValuesMatch,classifyProductType,type ProductTypeCode } from "@/lib/product-dictionaries";
 import { productSlugBase } from "@/lib/product-slug";
 import { adminVariantFieldValue,type AdminVariantFieldCode } from "@/lib/admin-variant-fields";
@@ -29,6 +29,7 @@ type Inventory={
 };
 type Variant={
   id?: string;
+  draftKey?: string;
   sku?: string;
   productTypeId?: string;
   label?: string;
@@ -49,6 +50,8 @@ type Variant={
 type ImageLink={
   mediaId: string;
   colorId: string|null;
+  variantId?: string|null;
+  variantKey?: string|null;
   sortOrder: number;
 };
 type Product={
@@ -124,7 +127,7 @@ const tabItems: Array<{
   label: string;
 }>=[{ id: "main",label: "Основное" },{ id: "variants",label: "Варианты" },{ id: "related",label: "Сопутствующие" }];
 const emptyProduct=(): Product => ({ name: "",slug: "",brandId: "",productTypeId: "",globalProductTypeId: "",modelId: null,productLineId: null,categoryId: "",model: "",generation: "",chip: "",displaySize: "",releaseYear: "",description: "",dictionaryOptionIds: {},specifications: {},relatedProductIds: [],isNew: false,status: "DRAFT",variants: [emptyVariant()],images: [] });
-function emptyVariant(): Variant { return { colorId: null,storage: "",ram: "",simType: "",connectivity: "",size: "",material: "",dictionaryOptionIds: {},attributes: {},active: true,inventory: {},presentCities: new Set() }; }
+function emptyVariant(): Variant { return { draftKey: crypto.randomUUID(),colorId: null,storage: "",ram: "",simType: "",connectivity: "",size: "",material: "",dictionaryOptionIds: {},attributes: {},active: true,inventory: {},presentCities: new Set() }; }
 function uniqueSlugPreview(value: string,rows: Array<{
   slug: string;
 }>,excludeSlug?: string) {
@@ -141,7 +144,7 @@ function isTradeInProduct(product: Product) { return product.specifications.trad
 function tradeInSpecification(product: Product,key: string) { const value=product.specifications[key]; return typeof value==="string"||typeof value==="number"? String(value):""; }
 function inventoryFor(city: City,value?: any): Inventory { return { cityId: city.id,price: value?.price??null,availability: value?.availability??"UNSPECIFIED",allowPreorder: value?.allowPreorder??false,deliveryTime: value?.deliveryTime??null }; }
 function productFromRow(row: any,cities: City[]): Product {
-  return { id: row.id,name: row.name,slug: row.slug,brandId: row.brandId,productTypeId: row.productTypeId,globalProductTypeId: row.globalProductTypeId??row.globalTypeId??"",modelId: row.modelId??null,productLineId: row.productLineId??null,categoryId: row.categoryId,model: row.model??"",generation: row.generation??"",chip: row.chip??"",displaySize: row.displaySize??"",releaseYear: row.releaseYear? String(row.releaseYear):"",description: row.description??"",dictionaryOptionIds: row.dictionaryOptionIds??{},specifications: parsePairs(row.specifications),relatedProductIds: row.relatedProductIds??[],isNew: Boolean(row.isNew),status: row.status,variants: (row.variants??[]).map((variant: any) => ({ id: variant.id,sku: variant.sku,productTypeId: row.productTypeId,label: variant.label,colorId: variant.colorId??null,storage: variant.storage??"",ram: variant.ram??"",simType: variant.simType??"",connectivity: variant.connectivity??"",size: variant.size??"",material: variant.material??"",dictionaryOptionIds: variant.dictionaryOptionIds??{},dictionaryOptionLabels: variant.dictionaryOptionLabels??{},attributes: parsePairs(variant.attributes),active: variant.active!==false,inventory: Object.fromEntries(cities.map((city) => [city.id,inventoryFor(city,variant.inventory?.find((item: any) => item.cityId===city.id))])),presentCities: new Set<string>((variant.inventory??[]).map((item: any) => item.cityId)) })),images: (row.images??[]).map((image: any) => ({ mediaId: image.mediaId,colorId: image.colorId??null,sortOrder: image.sortOrder??0 })) };
+  return { id: row.id,name: row.name,slug: row.slug,brandId: row.brandId,productTypeId: row.productTypeId,globalProductTypeId: row.globalProductTypeId??row.globalTypeId??"",modelId: row.modelId??null,productLineId: row.productLineId??null,categoryId: row.categoryId,model: row.model??"",generation: row.generation??"",chip: row.chip??"",displaySize: row.displaySize??"",releaseYear: row.releaseYear? String(row.releaseYear):"",description: row.description??"",dictionaryOptionIds: row.dictionaryOptionIds??{},specifications: parsePairs(row.specifications),relatedProductIds: row.relatedProductIds??[],isNew: Boolean(row.isNew),status: row.status,variants: (row.variants??[]).map((variant: any) => ({ id: variant.id,sku: variant.sku,productTypeId: row.productTypeId,label: variant.label,colorId: variant.colorId??null,storage: variant.storage??"",ram: variant.ram??"",simType: variant.simType??"",connectivity: variant.connectivity??"",size: variant.size??"",material: variant.material??"",dictionaryOptionIds: variant.dictionaryOptionIds??{},dictionaryOptionLabels: variant.dictionaryOptionLabels??{},attributes: parsePairs(variant.attributes),active: variant.active!==false,inventory: Object.fromEntries(cities.map((city) => [city.id,inventoryFor(city,variant.inventory?.find((item: any) => item.cityId===city.id))])),presentCities: new Set<string>((variant.inventory??[]).map((item: any) => item.cityId)) })),images: (row.images??[]).map((image: any) => ({ mediaId: image.mediaId,colorId: image.colorId??null,variantId:image.variantId??null,sortOrder: image.sortOrder??0 })) };
 }
 function publicationReason(row: any) {
   if(row.status!=="PUBLISHED")
@@ -477,7 +480,7 @@ const activeType=payload?.options.types.find((item) => item.id===editing?.global
   const setInventoryField=(variantIndex: number,cityId: string,patch: Partial<Inventory>) => { patchInventory(variantIndex,cityId,patch); setDirty(true); };
   const setImageField=(index: number,patch: Partial<ImageLink>) => {
     const current=editing?.images[index]; if(!editing||!current)
-      return; const mediaId=patch.mediaId??current.mediaId; const colorId=patch.colorId===undefined? current.colorId:patch.colorId; if(mediaId&&editing.images.some((image,itemIndex) => itemIndex!==index&&image.mediaId===mediaId&&image.colorId===colorId)) {
+      return; const mediaId=patch.mediaId??current.mediaId; const variantId=patch.variantId===undefined?current.variantId:patch.variantId; const variantKey=patch.variantKey===undefined?current.variantKey:patch.variantKey; const colorId=patch.colorId===undefined? current.colorId:patch.colorId; if(mediaId&&editing.images.some((image,itemIndex) => itemIndex!==index&&image.mediaId===mediaId&&(variantId?image.variantId===variantId:variantKey?image.variantKey===variantKey:!image.variantId&&!image.variantKey&&image.colorId===colorId))) {
         setFormError("Это фото уже добавлено в выбранную галерею.");
         return;
       } patchImage(index,patch); setDirty(true);
@@ -508,7 +511,7 @@ const activeType=payload?.options.types.find((item) => item.id===editing?.global
           const result=await response.json().catch(()=>({}));
           if(!response.ok) throw new Error(result.error||`Не удалось удалить вариант (${response.status}).`);
           const variants=editing.variants.filter((_,itemIndex)=>itemIndex!==index);
-          setEditing((current)=>current?{...current,variants}:current);
+          setEditing((current)=>current?{...current,variants,images:current.images.filter((image)=>image.variantId!==variant.id)}:current);
           setSelectedVariant(Math.max(0,Math.min(selectedVariant,variants.length-1)));
           await load();
         } catch(error) { setFormError(error instanceof Error?error.message:"Не удалось удалить вариант."); }
@@ -518,17 +521,13 @@ const activeType=payload?.options.types.find((item) => item.id===editing?.global
           return; if(editing.variants.length<2) {
             setFormError("У товара должен остаться хотя бы один вариант.");
             return;
-          } update({ variants: editing.variants.filter((_,itemIndex) => itemIndex!==index) }); setSelectedVariant(Math.max(0,Math.min(selectedVariant,editing.variants.length-2))); setDirty(true);
+          } update({ variants: editing.variants.filter((_,itemIndex) => itemIndex!==index),images:editing.images.filter((image)=>image.variantKey!==editing.variants[index]?.draftKey) }); setSelectedVariant(Math.max(0,Math.min(selectedVariant,editing.variants.length-2))); setDirty(true);
       }} makeMainImage={(index) => {
-        const image=editing.images[index]; if(!image)
-          return; const next=editing.images.map((item) => ({ ...item })); next.forEach((item,itemIndex) => {
-            if(item.colorId===image.colorId&&item.sortOrder<image.sortOrder)
-              item.sortOrder+=1;
-          }); next[index].sortOrder=0; update({ images: next }); setDirty(true);
-      }} addImage={(colorId) => { update({ images: [...editing.images,{ mediaId: "",colorId,sortOrder: editing.images.filter((image) => image.colorId===colorId).length }] }); setDirty(true); }} removeImage={(index) => { update({ images: editing.images.filter((_,itemIndex) => itemIndex!==index) }); setDirty(true); }} upload={async (file,colorId) => {
+        setEditing((current)=>{const image=current?.images[index];if(!current||!image)return current;const next=current.images.map((item)=>({...item}));next.forEach((item)=>{if(item.variantId===image.variantId&&item.variantKey===image.variantKey&&item.colorId===image.colorId&&item.sortOrder<image.sortOrder)item.sortOrder+=1;});next[index].sortOrder=0;return {...current,images:next};}); setDirty(true);
+      }} addImage={(mediaId,variantId,variantKey) => { setEditing((current)=>current?{...current,images:[...current.images,{ mediaId,colorId:null,variantId:variantId??null,variantKey:variantKey??null,sortOrder:current.images.filter((image)=>variantId?image.variantId===variantId:image.variantKey===variantKey).length }]}:current); setDirty(true); }} removeImage={(index) => { setEditing((current)=>current?{...current,images:current.images.filter((_,itemIndex)=>itemIndex!==index)}:current); setDirty(true); }} upload={async (file,variantId,variantKey) => {
         const csrfValue=csrf(); if(!csrfValue)
           throw new Error("Сессия или CSRF-токен недоступны. Войдите повторно."); const data=new FormData(); data.set("file",file); const response=await fetch("/api/admin/media",{ method: "POST",headers: { "x-csrf-token": csrfValue },body: data }); const result=await response.json().catch(() => ({})); if(!response.ok)
-          throw new Error(result.error||`Не удалось загрузить изображение (${response.status}).`); const uploaded=result.data as Media; setMedia((items) => [uploaded,...items]); update({ images: [...editing.images,{ mediaId: uploaded.id,colorId,sortOrder: editing.images.filter((image) => image.colorId===colorId).length }] }); setDirty(true);
+          throw new Error(result.error||`Не удалось загрузить изображение (${response.status}).`); const uploaded=result.data as Media; setMedia((items) => [uploaded,...items]); setEditing((current)=>current?{...current,images:[...current.images,{ mediaId:uploaded.id,colorId:null,variantId:variantId??null,variantKey:variantKey??null,sortOrder:current.images.filter((image)=>variantId?image.variantId===variantId:image.variantKey===variantKey).length }]}:current); setDirty(true);
       }} close={closeEditor} save={() => void save()} />
     </div>}
   </div>;
@@ -554,9 +553,9 @@ function ProductEditor(props: {
   deleteVariant: (index: number) => Promise<void>;
   removeVariant: (index: number) => void;
   makeMainImage: (index: number) => void;
-  addImage: (colorId: string|null) => void;
+  addImage: (mediaId: string,variantId: string|null,variantKey: string|null) => void;
   removeImage: (index: number) => void;
-  upload: (file: File,colorId: string|null) => Promise<void>;
+  upload: (file: File,variantId: string|null,variantKey: string|null) => Promise<void>;
   close: () => void;
   save: () => void;
 }) {
@@ -624,7 +623,7 @@ function ProductEditor(props: {
       {props.activeTab==="variants"&&<div className="admin-product-editor-panel admin-product-variants">
         <div className="admin-product-section-title"><div><h3>{tradeInMode?"Цена, доступность и фотографии экземпляра":`Варианты товара — ${editing.variants.length}`}</h3></div>{!tradeInMode&&<button type="button" className="admin-secondary" onClick={() => { const nextIndex=editing.variants.length; props.addVariant(); setSelectedVariant(nextIndex); setExpandedVariant(nextIndex); }}><Plus size={15}/>Добавить вариант</button>}</div>
         <div className="admin-variant-browser">
-          <div className="admin-variant-list">{sortedVariants.map(({item,index}) => { const expanded=expandedVariant===index; return <div className={`admin-variant-list-item${expanded?" active":""}`} key={item.id??index}>
+          <div className="admin-variant-list">{sortedVariants.map(({item,index}) => { const expanded=expandedVariant===index; return <div className={`admin-variant-list-item${expanded?" active":""}`} key={item.id??item.draftKey??index}>
             <button type="button" aria-expanded={expanded} onClick={() => { setSelectedVariant(index); setExpandedVariant(expanded?null:index); }}><span><strong>{variantsLabel(item,index)}</strong><small>{item.sku??"Новый вариант"}</small></span><ChevronDown size={17} aria-hidden="true" /></button>
             <span className={`admin-variant-status${item.active?" is-active":""}`} title={item.active?"Активен":"Неактивен"} aria-label={item.active?"Активен":"Неактивен"}/>
             {item.id&&!tradeInMode&&<button type="button" className="remove" aria-label={`Удалить вариант ${item.sku}`} title="Удалить вариант" disabled={props.busy} onClick={(event)=>{event.stopPropagation();void props.deleteVariant(index);}}><Trash2 size={15}/></button>}
@@ -632,7 +631,7 @@ function ProductEditor(props: {
             {expanded&&variant&&<div className="admin-variant-detail">
               <section className="admin-variant-block"><div className="admin-variant-block-head"><div><h4>Характеристики</h4></div></div><div className="admin-variant-core-grid"><label>SKU<input readOnly value={variant.sku??"Создаётся автоматически"}/></label><label className="admin-check"><input type="checkbox" checked={variant.active} onChange={(event)=>props.setVariantField(index,{active:event.target.checked})}/>Вариант активен</label></div><VariantAttributesEditor key={variant.id??index} variant={variant} variantKey={variant.id??index} productTypeKey={props.activeType?.globalTypeKey??""} options={registeredOptions} definitions={registeredDefinitions} colors={payload.options.colors} onColorChange={(colorId)=>props.setVariantField(index,{colorId})} onChange={(dictionaryOptionIds,attributes,changedCode,optionId)=>updateVariantAttributes(index,dictionaryOptionIds,attributes,changedCode,optionId)}/></section>
               <section className="admin-variant-block"><div className="admin-variant-block-head"><div><h4>Цены и доступность по городам</h4></div></div><div className="admin-city-table-wrap"><table className="admin-city-table"><thead><tr><th>Город</th><th>Цена</th><th>Старая цена</th><th>Доступность</th></tr></thead><tbody>{payload.options.cities.map((city)=>{const inventory=variant.inventory[city.id]??inventoryFor(city);const approved=approvedAvailability(inventory);const selectValue=approved??"__LEGACY__";return <tr key={city.id}><th>{city.name}</th><td><input aria-label={`Цена, ${city.name}`} type="number" min="0" step="1" value={inventory.price??""} onChange={(event)=>props.setInventoryField(index,city.id,{price:event.target.value===""?null:Number(event.target.value),...(event.target.value!==""&&inventory.availability==="UNSPECIFIED"?inventoryTupleForAvailability("IN_STOCK"):{})})}/></td><td className="admin-calculated-price"><input aria-label={`Старая цена, ${city.name}`} type="number" readOnly aria-readonly="true" value={calculateOldPrice(inventory.price)??""}/><small>+15%, вверх до 990</small></td><td><select aria-label={`Доступность, ${city.name}`} value={selectValue} onChange={(event)=>props.setInventoryField(index,city.id,inventoryTupleForAvailability(event.target.value as ApprovedAvailability))}>{!approved&&<option value="__LEGACY__" disabled>Прежнее значение: {inventoryAvailabilityLabel(inventory)}</option>}{APPROVED_AVAILABILITY_OPTIONS.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></td></tr>})}</tbody></table></div></section>
-              <section className="admin-variant-block"><ProductGalleryPanel title="Фотографии" images={editing.images} scopeColorId={variant.colorId} colorName={payload.options.colors.find((entry)=>entry.id===variant.colorId)?.name??null} media={media} upload={props.upload} addImage={props.addImage} setImageField={props.setImageField} makeMainImage={props.makeMainImage} removeImage={props.removeImage}/></section>
+              <section className="admin-variant-block"><ProductGalleryPanel title="Фотографии" images={editing.images} variantId={variant.id??null} variantKey={variant.draftKey??null} scopeColorId={variant.colorId} colorName={payload.options.colors.find((entry)=>entry.id===variant.colorId)?.name??null} media={media} upload={props.upload} addImage={props.addImage} setImageField={props.setImageField} makeMainImage={props.makeMainImage} removeImage={props.removeImage}/></section>
               {!variant.id&&!tradeInMode&&<section className="admin-variant-block admin-variant-actions"><div><h4>Дополнительные действия</h4><p>Удаление касается только несохранённого варианта.</p></div><button type="button" className="admin-danger" onClick={() => { if(window.confirm("Удалить новый вариант?")) { props.removeVariant(index); setExpandedVariant(null); } }}><Trash2 size={15}/>Удалить вариант</button></section>}
             </div>}
           </div>; })}</div>
@@ -716,21 +715,30 @@ function VariantAttributesEditor(props: {
 function ProductGalleryPanel(props: {
   title: string;
   images: ImageLink[];
+  variantId: string|null;
+  variantKey: string|null;
   scopeColorId: string|null;
   colorName: string|null;
   media: Media[];
-  upload: (file: File,colorId: string|null) => Promise<void>;
-  addImage: (colorId: string|null) => void;
+  upload: (file: File,variantId: string|null,variantKey: string|null) => Promise<void>;
+  addImage: (mediaId: string,variantId: string|null,variantKey: string|null) => void;
   setImageField: (index: number,patch: Partial<ImageLink>) => void;
   makeMainImage: (index: number) => void;
   removeImage: (index: number) => void;
 }) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
-  const exactImages=props.images.map((image,index) => ({ image,index })).filter(({ image }) => image.colorId===props.scopeColorId);
-  const usingLegacyFallback=Boolean(props.scopeColorId)&&exactImages.length===0;
-  const images=(usingLegacyFallback?props.images.map((image,index) => ({ image,index })).filter(({ image }) => image.colorId===null):exactImages).sort((a,b) => a.image.sortOrder-b.image.sortOrder);
+  const [pickerIndex,setPickerIndex]=useState<number|null|"new">(null);
+  const [mediaQuery,setMediaQuery]=useState("");
+  const [preview,setPreview]=useState<Media|null>(null);
+  const exactImages=props.images.map((image,index) => ({ image,index,isFallback:false })).filter(({ image }) => props.variantId?image.variantId===props.variantId:image.variantKey===props.variantKey);
+  const colorFallback=props.scopeColorId?props.images.map((image,index) => ({ image,index,isFallback:true })).filter(({ image }) => !image.variantId&&!image.variantKey&&image.colorId===props.scopeColorId):[];
+  const sharedFallback=props.images.map((image,index) => ({ image,index,isFallback:true })).filter(({ image }) => !image.variantId&&!image.variantKey&&image.colorId===null);
+  const usingLegacyFallback=exactImages.length===0;
+  const images=(exactImages.length?exactImages:colorFallback.length?colorFallback:sharedFallback).sort((a,b) => a.image.sortOrder-b.image.sortOrder);
   const mainIndex=images[0]?.index;
+  const selectedMediaIds=new Set(exactImages.map(({image})=>image.mediaId));
+  const filteredMedia=useMemo(()=>{const query=mediaQuery.trim().toLocaleLowerCase("ru-RU");return query?props.media.filter((item)=>item.filename.toLocaleLowerCase("ru-RU").includes(query)):props.media;},[mediaQuery,props.media]);
   const addUpload=async (event: ChangeEvent<HTMLInputElement>) => {
     const file=event.currentTarget.files?.[0];
     event.currentTarget.value="";
@@ -739,7 +747,7 @@ function ProductGalleryPanel(props: {
     setBusy(true);
     setError("");
     try {
-      await props.upload(file,props.scopeColorId);
+      await props.upload(file,props.variantId,props.variantKey);
     }
     catch(cause) {
       setError(cause instanceof Error? cause.message:"Не удалось загрузить фото.");
@@ -749,20 +757,22 @@ function ProductGalleryPanel(props: {
     }
   };
   return <section className="admin-variant-photos">
-    <div className="admin-product-section-title"><div><h4>{props.title}{props.colorName? ` · ${props.colorName}`:""}</h4><p>{usingLegacyFallback?"Показаны сохранённые общие фотографии. Новые фото будут привязаны к цвету варианта.":props.scopeColorId? "Галерея привязана к цвету: варианты этого цвета используют одни фотографии.":"Фотографии варианта без выбранного цвета."}</p></div><div className="admin-product-image-actions"><label className={`admin-secondary upload-control ${busy? "disabled":""}`}><ImagePlus size={15} />{busy? "Загрузка…":"Загрузить фото"}<input type="file" accept="image/png,image/jpeg,image/webp,image/avif" disabled={busy} onChange={(event) => void addUpload(event)} /></label><button type="button" className="admin-secondary" onClick={() => props.addImage(props.scopeColorId)}><Plus size={15} />Из медиатеки</button></div></div>
+    <div className="admin-product-section-title"><div><h4>{props.title}{props.colorName? ` · ${props.colorName}`:""}</h4><p>{usingLegacyFallback&&images.length?"Показан fallback товара или цвета только для просмотра. Новое фото будет сохранено только у этого варианта.":"Собственная галерея выбранного варианта."}</p></div><div className="admin-product-image-actions"><label className={`admin-secondary upload-control ${busy? "disabled":""}`}><ImagePlus size={15} />{busy? "Загрузка…":"Загрузить фото"}<input type="file" accept="image/png,image/jpeg,image/webp,image/avif" disabled={busy} onChange={(event) => void addUpload(event)} /></label><button type="button" className="admin-secondary" onClick={() => setPickerIndex("new")}><Plus size={15} />Из медиатеки</button></div></div>
     {error&&<p className="form-error" role="alert">{error}</p>}
-    {images.length? <div className="admin-product-image-grid">{images.map(({ image,index }) => {
+    {images.length? <div className="admin-product-image-grid">{images.map(({ image,index,isFallback }) => {
       const asset=props.media.find((item) => item.id===image.mediaId);
-      return <article key={`${image.mediaId}-${index}`} className={props.scopeColorId? "color-image":""}>
+      return <article key={`${image.variantId??image.variantKey??image.colorId??"product"}-${image.mediaId}-${index}`} className={isFallback?"is-fallback":""}>
         {asset? <img src={asset.url} alt={asset.alt||asset.filename} />:<div className="admin-product-image-placeholder">Выберите файл</div>}
-        <div className="admin-product-image-meta"><strong>{index===mainIndex? "Главное фото":`Фото · порядок ${image.sortOrder+1}`}</strong>
-          <label>Файл<select value={image.mediaId} onChange={(event) => props.setImageField(index,{ mediaId: event.target.value })}><option value="">Выберите фото</option>{props.media.map((item) => <option key={item.id} value={item.id}>{item.filename}</option>)}</select></label>
-          <label>Порядок<input type="number" min="0" max="1000" value={image.sortOrder} onChange={(event) => props.setImageField(index,{ sortOrder: Number(event.target.value) })} /></label>
+        <div className="admin-product-image-meta"><strong>{isFallback?"Fallback товара":index===mainIndex? "Главное фото":`Фото · порядок ${image.sortOrder+1}`}</strong>
+          <span className="admin-product-image-filename">{asset?.filename??"Файл не найден"}</span>
+          {!isFallback&&<><button type="button" className="admin-secondary" onClick={()=>setPickerIndex(index)}>Заменить</button><label>Порядок<input type="number" min="0" max="1000" value={image.sortOrder} onChange={(event) => props.setImageField(index,{ sortOrder: Number(event.target.value) })} /></label>
           {index!==mainIndex&&<button type="button" className="admin-secondary" onClick={() => props.makeMainImage(index)}>Сделать главным</button>}
-          <button type="button" className="admin-icon-button admin-product-remove-image" aria-label="Удалить привязку фото" onClick={() => props.removeImage(index)}><Trash2 size={15} />Убрать привязку</button>
+          <button type="button" className="admin-icon-button admin-product-remove-image" aria-label="Удалить привязку фото" onClick={() => props.removeImage(index)}><Trash2 size={15} />Убрать привязку</button></>}
         </div>
       </article>;
     })}</div>:<div className="admin-product-empty-images">В этой галерее пока нет фото. Выберите изображение из медиатеки или загрузите его.</div>}
+    {pickerIndex!==null&&<div className="admin-modal-backdrop admin-media-picker-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)setPickerIndex(null);}}><section className="admin-modal admin-media-picker" role="dialog" aria-modal="true" aria-labelledby="media-picker-title"><header><h2 id="media-picker-title">Выбрать фотографию</h2><button type="button" className="icon-action" aria-label="Закрыть" onClick={()=>setPickerIndex(null)}><X size={18}/></button></header><div className="admin-modal-body"><label className="admin-field-search"><Search size={17}/><input autoFocus value={mediaQuery} onChange={(event)=>setMediaQuery(event.target.value)} placeholder="Поиск по названию файла"/></label>{filteredMedia.length?<div className="admin-media-picker-grid">{filteredMedia.map((item)=>{const selected=selectedMediaIds.has(item.id);return <article className={selected?"is-selected":""} key={item.id}><button type="button" className="admin-media-picker-choice" disabled={selected&&pickerIndex==="new"} onClick={()=>{if(pickerIndex==="new")props.addImage(item.id,props.variantId,props.variantKey);else props.setImageField(pickerIndex,{mediaId:item.id});setPickerIndex(null);setMediaQuery("");}}><span>{item.url?<img src={item.url} alt={item.alt||item.filename} loading="lazy"/>:<span className="admin-media-picker-missing">Нет изображения</span>}</span><strong title={item.filename}>{item.filename}</strong>{selected&&<small>Уже выбрано</small>}</button><button type="button" className="icon-action admin-media-preview-button" aria-label={`Открыть ${item.filename}`} title="Увеличить" onClick={()=>setPreview(item)}><Eye size={16}/></button></article>;})}</div>:<div className="admin-product-empty-images">Изображения не найдены.</div>}</div></section></div>}
+    {preview&&<div className="admin-modal-backdrop admin-media-preview" onMouseDown={(event)=>{if(event.target===event.currentTarget)setPreview(null);}}><section role="dialog" aria-modal="true" aria-label={preview.filename}><button type="button" className="icon-action" aria-label="Закрыть" onClick={()=>setPreview(null)}><X size={20}/></button><img src={preview.url} alt={preview.alt||preview.filename}/><strong>{preview.filename}</strong></section></div>}
   </section>;
 }
 function TradeInProductFields({ product,models,setField }: { product: Product; models: Payload["options"]["models"]; setField: (patch: Partial<Product>) => void }) {

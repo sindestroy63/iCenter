@@ -31,7 +31,7 @@ export type CatalogProductDto = {
   category: { id: string; name: string; slug: string; parentId?: string | null; href?: string | null };
   city: { name: string; slug: string };
   variants: CatalogVariantDto[];
-  images: { id: string; src: string | null; alt: string; colorId: string | null; order: number }[];
+  images: { id: string; src: string | null; alt: string; colorId: string | null; variantId?: string | null; order: number }[];
   relatedProductIds?: string[];
 };
 
@@ -219,6 +219,10 @@ export function productImage(product: CatalogProductDto): string {
 }
 
 export function productVariantImage(product: CatalogProductDto, variant: CatalogVariantDto | null): string {
+  if (variant?.id) {
+    const variantImage = product.images.find((image) => image.variantId === variant.id && image.src);
+    if (variantImage?.src) return variantImage.src;
+  }
   if (variant?.color?.id) {
     const colorImage = product.images.find((image) => image.colorId === variant.color?.id && image.src);
     if (colorImage?.src) return colorImage.src;

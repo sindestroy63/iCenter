@@ -173,6 +173,7 @@ const dictionaryIdsSchema = z
   .default({});
 const variantSchema = z.object({
   id: z.string().optional(),
+  draftKey: z.string().min(1).max(100).optional(),
   label: z.string().trim().max(180).optional(),
   colorId: z.string().nullable().optional(),
   storage: z.string().max(100).nullable().optional(),
@@ -189,8 +190,10 @@ const variantSchema = z.object({
 const imageSchema = z.object({
   mediaId: z.string().min(1),
   colorId: z.string().nullable().optional(),
+  variantId: z.string().nullable().optional(),
+  variantKey: z.string().nullable().optional(),
   sortOrder: z.number().int().min(0).max(1000),
-});
+}).refine((image) => !(image.variantId && image.variantKey), { message: "invalid image scope" });
 const productSchema = z
   .object({
     name: z.string().trim().min(1).max(240),
@@ -472,6 +475,14 @@ function mutationFailure(error: unknown, action: "create" | "update" | "delete")
         ],
       ],
       [
+        "INVALID_VARIANT_IMAGE",
+        [400, "Фотография ссылается на устаревший вариант. Обновите товар и повторите выбор."],
+      ],
+      [
+        "VARIANT_GALLERY_SCHEMA_MISSING",
+        [503, "Галереи вариантов ещё не подключены. Обратитесь к администратору перед сохранением фотографий."],
+      ],
+      [
         "INVALID_MEDIA",
         [
           400,
@@ -497,7 +508,8 @@ function mutationFailure(error: unknown, action: "create" | "update" | "delete")
   if (
     (code === "23505" || code === "P2002" || code === "P2010") &&
     (constraint.includes("product_gallery_images_productId_mediaId") ||
-      constraint.includes("color_gallery_images_colorGalleryId_mediaId"))
+      constraint.includes("color_gallery_images_colorGalleryId_mediaId") ||
+      constraint.includes("variant_gallery_images_variant_media_key"))
   )
     return {
       status: 400,
@@ -588,6 +600,7 @@ export async function GET(request: Request) {
       colors,
       cities,
       colorImages,
+      variantImages,
       productLines,
       models,
     ] = await Promise.all([
@@ -609,6 +622,7 @@ export async function GET(request: Request) {
       db.$queryRaw<
         any[]
       >`SELECT cg."productId", cgi."mediaId", cg."colorId", cgi."sortOrder", m."storagePath", m.alt FROM color_galleries cg JOIN color_gallery_images cgi ON cgi."colorGalleryId"=cg.id JOIN media m ON m.id=cgi."mediaId" ORDER BY cgi."sortOrder"`,
+      db.$queryRaw<any[]>`SELECT pv."productId", vgi."variantId", vgi."mediaId", vgi."sortOrder", m."storagePath", m.alt FROM variant_gallery_images vgi JOIN product_variants pv ON pv.id=vgi."variantId" JOIN media m ON m.id=vgi."mediaId" ORDER BY vgi."sortOrder"`,
       db.$queryRaw<
         any[]
       >`SELECT id,"brandId","canonicalKey",name,"sortOrder","isActive" FROM product_lines WHERE "isActive"=TRUE ORDER BY "brandId","sortOrder",name`,
@@ -729,6 +743,19 @@ export async function GET(request: Request) {
         product.images.set(`${image.colorId}:${image.mediaId}`, {
           mediaId: image.mediaId,
           colorId: image.colorId,
+          variantId: null,
+          sortOrder: image.sortOrder,
+          url: `/${image.storagePath}`,
+          alt: image.alt ?? "",
+        });
+    }
+    for (const image of variantImages) {
+      const product = products.get(image.productId);
+      if (product)
+        product.images.set(`variant:${image.variantId}:${image.mediaId}`, {
+          mediaId: image.mediaId,
+          colorId: null,
+          variantId: image.variantId,
           sortOrder: image.sortOrder,
           url: `/${image.storagePath}`,
           alt: image.alt ?? "",
@@ -831,6 +858,8 @@ export async function POST(request: Request) {
         `;
         await tx.$executeRaw`INSERT INTO products (id,name,slug,"manualOrder","brandId","productTypeId","globalProductTypeId","productLineId","categoryId","modelId",model,generation,chip,"displaySize","releaseYear",description,specifications,"isNew",status,"updatedAt") VALUES (${id},${product.name},${slug},${nextOrderRows[0]?.nextOrder ?? 0},${product.brandId},${product.productTypeId},${product.globalProductTypeId},${product.productLineId ?? null},${product.categoryId},${selectedModel?.id ?? null},${selectedModel?.name ?? product.model ?? null},${product.generation ?? null},${product.chip ?? null},${product.displaySize ?? null},${product.releaseYear ?? null},${JSON.stringify({ text: product.description })}::jsonb,${JSON.stringify(product.specifications)}::jsonb,${product.isNew},${product.status}::"ProductStatus",NOW())`;
         const savedVariantIds = await saveVariants(tx, id, product.variants);
+        const variantIdsByKey = new Map<string, string>();
+        product.variants.forEach((item, index) => { if (item.draftKey) variantIdsByKey.set(item.draftKey, item.id ?? savedVariantIds[index]); });
         await syncDictionaryLinks(
           tx,
           id,
@@ -840,7 +869,7 @@ export async function POST(request: Request) {
           })),
           product,
         );
-        await saveImages(tx, id, product.images);
+        await saveImages(tx, id, product.images, variantIdsByKey);
         await syncRelatedProducts(tx, id, product.relatedProductIds);
         const after = await getProductAuditSnapshot(tx, id);
         await writeAuditLog(tx, session, { action: "product.created", entityType: "product", entityId: id, changes: { old: null, new: after } });
@@ -934,6 +963,8 @@ export async function PATCH(request: Request) {
         if (nextSlug !== current[0].slug) await preserveSlugAlias(tx, String(current[0].slug), productId);
         await tx.$executeRaw`UPDATE products SET name=${product.name},slug=${nextSlug},"brandId"=${product.brandId},"productTypeId"=${product.productTypeId},"globalProductTypeId"=${product.globalProductTypeId},"productLineId"=${product.productLineId ?? null},"categoryId"=${product.categoryId},"modelId"=${selectedModel?.id ?? null},model=${selectedModel?.name ?? product.model ?? null},generation=${product.generation ?? null},chip=${product.chip ?? null},"displaySize"=${product.displaySize ?? null},"releaseYear"=${product.releaseYear ?? null},description=${JSON.stringify({ text: product.description })}::jsonb,specifications=${JSON.stringify(product.specifications)}::jsonb,"isNew"=${product.isNew},status=${product.status}::"ProductStatus","updatedAt"=NOW() WHERE id=${productId}`;
         const savedVariantIds = await saveVariants(tx, productId, product.variants);
+        const variantIdsByKey = new Map<string, string>();
+        product.variants.forEach((item, index) => { if (item.draftKey) variantIdsByKey.set(item.draftKey, item.id ?? savedVariantIds[index]); });
         await syncDictionaryLinks(
           tx,
           productId,
@@ -943,7 +974,7 @@ export async function PATCH(request: Request) {
           })),
           product,
         );
-        await saveImages(tx, productId, product.images);
+        await saveImages(tx, productId, product.images, variantIdsByKey);
         await syncRelatedProducts(tx, productId, product.relatedProductIds);
         const after = await getProductAuditSnapshot(tx, productId);
         await writeAuditLog(tx, session, { action: "product.updated", entityType: "product", entityId: productId, changes: productAuditChanges(before, after) });

@@ -25,7 +25,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
       }
       if (!productId) return { city, rows: [], product: null };
       const resolvedProductId = productId;
-      const rows = await tx.$queryRaw<Array<{ id: string; slug: string; name: string; model: string | null; generation: string | null; chip: string | null; displaySize: string | null; releaseYear: number | null; description: unknown; specifications: unknown; isNew: boolean; brandId: string; brandName: string; brandSlug: string; typeId: string; typeName: string; typeSlug: string; typeAttributes: unknown; categoryId: string; categoryName: string; categorySlug: string; parentId: string | null; variantId: string; sku: string; label: string; storage: string | null; ram: string | null; simType: string | null; connectivity: string | null; size: string | null; material: string | null; attributes: unknown; colorId: string | null; colorName: string | null; colorNameRu: string | null; colorSlug: string | null; hexPrimary: string | null; hexSecondary: string | null; price: string | null; oldPrice: string | null; availability: string; allowPreorder: boolean; deliveryTime: string | null; imageId: string | null; imageOrder: number | null; imageColorId: string | null; imagePath: string | null; imageMimeType: string | null; imageAlt: string | null }>>`
+      const rows = await tx.$queryRaw<Array<{ id: string; slug: string; name: string; model: string | null; generation: string | null; chip: string | null; displaySize: string | null; releaseYear: number | null; description: unknown; specifications: unknown; isNew: boolean; brandId: string; brandName: string; brandSlug: string; typeId: string; typeName: string; typeSlug: string; typeAttributes: unknown; categoryId: string; categoryName: string; categorySlug: string; parentId: string | null; variantId: string; sku: string; label: string; storage: string | null; ram: string | null; simType: string | null; connectivity: string | null; size: string | null; material: string | null; attributes: unknown; colorId: string | null; colorName: string | null; colorNameRu: string | null; colorSlug: string | null; hexPrimary: string | null; hexSecondary: string | null; price: string | null; oldPrice: string | null; availability: string; allowPreorder: boolean; deliveryTime: string | null; imageId: string | null; imageOrder: number | null; imageColorId: string | null; imageVariantId: string | null; imagePath: string | null; imageMimeType: string | null; imageAlt: string | null }>>`
         SELECT p.id, p.slug, p.name, p.model, p.generation, p.chip, p."displaySize", p."releaseYear", p.description, p.specifications, p."isNew",
                b.id AS "brandId", b.name AS "brandName", b.slug AS "brandSlug",
                pt.id AS "typeId", pt.name AS "typeName", pt."canonicalKey" AS "typeSlug", NULL::jsonb AS "typeAttributes",
@@ -33,7 +33,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
                pv.id AS "variantId", pv.sku, pv.label, pv.storage, pv.ram, pv."simType", pv.connectivity, pv.size, pv.material, pv.attributes,
                color.id AS "colorId", color.name AS "colorName", to_jsonb(color)->>'nameRu' AS "colorNameRu", color.slug AS "colorSlug", color."hexPrimary", color."hexSecondary",
                inv.price::text AS price, inv."oldPrice"::text AS "oldPrice", inv.availability::text AS availability, inv."allowPreorder", inv."deliveryTime",
-               gallery.id AS "imageId", gallery."sortOrder" AS "imageOrder", gallery."colorId" AS "imageColorId", gallery."storagePath" AS "imagePath", gallery."mimeType" AS "imageMimeType", gallery.alt AS "imageAlt"
+               gallery.id AS "imageId", gallery."sortOrder" AS "imageOrder", gallery."colorId" AS "imageColorId", gallery."variantId" AS "imageVariantId", gallery."storagePath" AS "imagePath", gallery."mimeType" AS "imageMimeType", gallery.alt AS "imageAlt"
         FROM products p
         JOIN brands b ON b.id = p."brandId" AND b."isActive" = TRUE
         JOIN global_product_types pt ON pt.id = p."globalProductTypeId" AND pt."isActive" = TRUE
@@ -42,11 +42,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
         JOIN inventory inv ON inv."variantId" = pv.id AND inv."cityId" = ${city.id} AND inv."isActive" = TRUE
         LEFT JOIN colors color ON color.id = pv."colorId" AND color."isActive" = TRUE
         LEFT JOIN LATERAL (
-          SELECT gi.id, gi."sortOrder", NULL::text AS "colorId", img."storagePath", img."mimeType", img.alt
+          SELECT vgi.id, vgi."sortOrder", NULL::text AS "colorId", vgi."variantId", img."storagePath", img."mimeType", img.alt
+          FROM variant_gallery_images vgi JOIN media img ON img.id = vgi."mediaId"
+          WHERE vgi."variantId" = pv.id
+          UNION ALL
+          SELECT gi.id, gi."sortOrder", NULL::text AS "colorId", NULL::text AS "variantId", img."storagePath", img."mimeType", img.alt
           FROM product_gallery_images gi JOIN media img ON img.id = gi."mediaId"
           WHERE gi."productId" = p.id
           UNION ALL
-          SELECT cgi.id, cgi."sortOrder", cg."colorId", img."storagePath", img."mimeType", img.alt
+          SELECT cgi.id, cgi."sortOrder", cg."colorId", NULL::text AS "variantId", img."storagePath", img."mimeType", img.alt
           FROM color_galleries cg
           JOIN color_gallery_images cgi ON cgi."colorGalleryId" = cg.id
           JOIN media img ON img.id = cgi."mediaId"
@@ -97,7 +101,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
           const attributes = buildPublicVariantAttributes(parseJson(row.attributes), { storage: row.storage, ram: row.ram, simType: row.simType, connectivity: row.connectivity, size: row.size, material: row.material }, dynamicAttributes.get(row.variantId));
           variants.set(row.variantId, { id: row.variantId, sku: row.sku, label: row.label, attributes, attributeLabels: buildPublicVariantAttributeLabels(dynamicAttributes.get(row.variantId)), color: row.colorId ? { id: row.colorId, name: row.colorName, nameRu: row.colorNameRu, slug: row.colorSlug, hex: row.hexPrimary, secondaryHex: row.hexSecondary } : null, price: row.price, oldPrice: calculateOldPrice(row.price)?.toString() ?? null, availability: publicAvailability(row.availability, row.allowPreorder), deliveryTime: row.deliveryTime });
         }
-        if (row.imageId && !images.has(row.imageId)) images.set(row.imageId, { id: row.imageId, src: imageUrl(row.imagePath, row.imageMimeType), alt: row.imageAlt ?? "", colorId: row.imageColorId, order: row.imageOrder ?? 0 });
+        const imageKey = `${row.imageVariantId ?? row.imageColorId ?? "product"}:${row.imageId}`;
+        if (row.imageId && !images.has(imageKey)) images.set(imageKey, { id: row.imageId, src: imageUrl(row.imagePath, row.imageMimeType), alt: row.imageAlt ?? "", colorId: row.imageColorId, variantId: row.imageVariantId, order: row.imageOrder ?? 0 });
       }
       const specifications = parseJson(first.specifications);
       return { city, product: { id: first.id, slug: first.slug, name: first.name, model: first.model, generation: first.generation, chip: first.chip, displaySize: first.displaySize, releaseYear: first.releaseYear, description: parseJson(first.description), specifications, isNew: first.isNew, isUsed: tradeInProductDetails(specifications).isUsed, brand: { id: first.brandId, name: first.brandName, slug: first.brandSlug }, type: { id: first.typeId, name: first.typeName, slug: first.typeSlug, attributes: parseJson(first.typeAttributes) }, category: { id: first.categoryId, name: first.categoryName, slug: first.categorySlug, parentId: first.parentId }, city: { id: city.id, name: city.name, slug: city.slug }, variants: Array.from(variants.values()), images: Array.from(images.values()), relatedProductIds: relatedRows.map((row) => row.id) } };

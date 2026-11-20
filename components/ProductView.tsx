@@ -51,12 +51,13 @@ export default function ProductView({ slug, initialVariantId = "", initialName =
   }, [initialVariantId, isTarget, loading, slug]);
   const variants = product?.variants ?? [];
   const selectedVariant = variants.find((v) => v.id === selection) ?? variants[0];
-  useEffect(() => { setImage(0); }, [selectedVariant?.color?.id]);
+  useEffect(() => { setImage(0); }, [selectedVariant?.id]);
   const images = useMemo(() => {
     if (!product) return [];
-    const colorImages = selectedVariant?.color ? product.images.filter((entry) => entry.colorId === selectedVariant.color?.id) : [];
+    const variantImages = selectedVariant ? product.images.filter((entry) => entry.variantId === selectedVariant.id) : [];
+    const colorImages = selectedVariant?.color ? product.images.filter((entry) => !entry.variantId && entry.colorId === selectedVariant.color?.id) : [];
     const sharedImages = product.images.filter((entry) => entry.colorId === null);
-    return (colorImages.length ? colorImages : sharedImages).filter((entry) => entry.src);
+    return (variantImages.length ? variantImages : colorImages.length ? colorImages : sharedImages.filter((entry) => !entry.variantId)).filter((entry) => entry.src);
   }, [product, selectedVariant]);
   const visibleImages = images.filter((entry) => entry.src && !failedImages.has(entry.id));
   const markImageFailed = (id: string) => {
