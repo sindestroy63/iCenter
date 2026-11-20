@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
-import { ADMIN_DICTIONARY_REGISTRY, DICTIONARY_REGISTRY, type DictionaryCode } from "@/lib/product-dictionaries";
+import { ADMIN_DICTIONARY_REGISTRY, DICTIONARY_REGISTRY, dictionaryLabelKeyPart, type DictionaryCode } from "@/lib/product-dictionaries";
 import { catalogColorHex, catalogColorNames } from "@/lib/catalog-colors";
 import ColorName from "@/components/ColorName";
 
@@ -10,8 +10,6 @@ type Entry = { id: string; dictionary: string; canonicalKey: string; label: stri
 type Definition = { id: string; code: string; name: string; scope: string; valueKind: string; sortOrder: number; isActive: boolean; isManaged?: boolean; productTypeIds?: string[] };
 type ApiData = { data: Entry[]; globalTypes?: Entry[]; productTypes?: Array<{ id: string; name: string; isActive: boolean }>; legacyTypes?: Array<{ id: string; name: string; brandId: string }>; brands?: Array<{ id: string; name: string }>; role: string; canWrite: boolean; canManageAttributes?: boolean; definitions?: Definition[]; registry: typeof DICTIONARY_REGISTRY };
 const labels: Record<DictionaryCode, string> = { brand: "Бренд", productType: "Тип товара", productModel: "Модель", color: "Цвет", memory: "Память", ram: "RAM", sim: "SIM", connectivity: "Подключение", size: "Размер", material: "Материал", chip: "Процессор / чип", region: "Регион / версия", condition: "Состояние", bundle: "Комплектация", productLine: "Линейка товара" };
-const cyrillicSlug: Record<string, string> = { а:"a", б:"b", в:"v", г:"g", д:"d", е:"e", ё:"e", ж:"zh", з:"z", и:"i", й:"y", к:"k", л:"l", м:"m", н:"n", о:"o", п:"p", р:"r", с:"s", т:"t", у:"u", ф:"f", х:"h", ц:"ts", ч:"ch", ш:"sh", щ:"sch", ъ:"", ы:"y", ь:"", э:"e", ю:"yu", я:"ya" };
-const keyPart = (value: string) => value.toLocaleLowerCase("ru-RU").replace(/[а-яё]/g, (letter) => cyrillicSlug[letter] ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "value";
 const csrf = () => decodeURIComponent(document.cookie.split("; ").find((item) => item.startsWith("icenter_csrf="))?.split("=")[1] ?? "");
 
 export default function AdminDictionaries({ initialCode = "brand" }: { initialCode?: DictionaryCode }) {
@@ -62,7 +60,7 @@ export default function AdminDictionaries({ initialCode = "brand" }: { initialCo
     const current = entry ?? { id: "", dictionary: code, canonicalKey: "", label: "", aliases: [], sortOrder: entries.length * 10, isActive: true };
     setEditing(current);
     setLabel(current?.nameEn ?? current?.label ?? "");
-    setKey(current?.canonicalKey ?? `${code === "productType" ? "product_type" : code}:${keyPart("")}`);
+    setKey(current?.canonicalKey ?? `${code === "productType" ? "product_type" : code}:${dictionaryLabelKeyPart("")}`);
     setAliases(current?.aliases.join(", ") ?? "");
     setModelBrandId(current?.brandId ?? "");
     setModelTypeId(current?.globalProductTypeId ?? "");
@@ -100,10 +98,14 @@ export default function AdminDictionaries({ initialCode = "brand" }: { initialCo
     setBusy(true); setMessage("");
     try {
     const data = { ...(editing.id ? { id: editing.id } : {}), canonicalKey: key, label: label.trim(), aliases: aliases.split(",").map((item) => item.trim()).filter(Boolean), sortOrder: editing.sortOrder ?? entries.length * 10, isActive: code === "productModel" ? modelActive : editing.id ? entryActive : true, ...(code === "productModel" ? { brandId: modelBrandId, globalProductTypeId: modelTypeId } : {}), ...(code === "color" ? { nameRu: colorNameRu.trim() || null, hex: validHex ? normalizedHex : null } : {}) };
-      const response = editing.id
+      let response = editing.id
         ? await fetch("/api/admin/dictionaries", { method: "PATCH", headers: { "content-type": "application/json", "x-csrf-token": csrf() }, body: JSON.stringify({ code, id: editing.id, label: data.label, sortOrder: data.sortOrder, isActive: data.isActive, ...(code === "color" ? { nameRu: colorNameRu.trim() || null, hex: validHex ? normalizedHex : null } : {}), ...(code === "productModel" ? { brandId: modelBrandId, globalProductTypeId: modelTypeId } : {}) }) })
         : await fetch(`/api/admin/dictionaries?code=${encodeURIComponent(code)}`, { method: "POST", headers: { "content-type": "application/json", "x-csrf-token": csrf() }, body: JSON.stringify(data) });
-      const result = await response.json().catch(() => ({}));
+      let result = await response.json().catch(() => ({}));
+      if (!editing.id && response.status === 409 && result.code === "KEY_REPAIR_REQUIRED" && window.confirm(result.error)) {
+        response = await fetch(`/api/admin/dictionaries?code=${encodeURIComponent(code)}`, { method: "POST", headers: { "content-type": "application/json", "x-csrf-token": csrf() }, body: JSON.stringify({ ...data, repairConflictingKey: true }) });
+        result = await response.json().catch(() => ({}));
+      }
       if (!response.ok) throw new Error(result.error === "DICTIONARY_MIGRATION_REQUIRED" ? "Для сохранения русских названий требуется применить подготовленную миграцию справочника цветов." : result.error === "USED_VALUE" ? "Значение используется связанными данными и не может быть изменено." : result.error || "Не удалось сохранить значение.");
       setEditing(null); await load(code); setMessage("Изменения сохранены.");
     } catch (cause) { setMessage(cause instanceof Error ? cause.message : "Не удалось сохранить значение."); }
@@ -148,7 +150,7 @@ export default function AdminDictionaries({ initialCode = "brand" }: { initialCo
     {editing !== null && <div className="admin-modal-backdrop"><section className="admin-modal dictionary-modal">
       <header><h2>{editing.id ? "Изменить значение" : "Новое значение"}</h2><button onClick={() => setEditing(null)} aria-label="Закрыть"><X size={18} /></button></header>
       <div className="admin-modal-body">
-        <label className="admin-form-label">{code === "color" ? "Название на английском" : "Название"}<input value={label} onChange={(event) => { const next = event.target.value; setLabel(next); if (!editing.id) setKey(`${code === "productType" ? "product_type" : code}:${keyPart(next)}`); }} /></label>
+        <label className="admin-form-label">{code === "color" ? "Название на английском" : "Название"}<input value={label} onChange={(event) => { const next = event.target.value; setLabel(next); if (!editing.id) setKey(`${code === "productType" ? "product_type" : code}:${dictionaryLabelKeyPart(next)}`); }} /></label>
         {code === "color" && <label className="admin-form-label">Название на русском<input value={colorNameRu} onChange={(event) => setColorNameRu(event.target.value)} placeholder="Необязательно" /></label>}
         {code !== "productModel" && code !== "productType" && code !== "brand" && <label className="admin-form-label">Алиасы, через запятую<input value={aliases} onChange={(event) => setAliases(event.target.value)} /></label>}
         {code === "productModel" && <><label className="admin-form-label">Бренд<select value={modelBrandId} onChange={(event) => { setModelBrandId(event.target.value); setModelTypeId(""); }}><option value="">Выберите бренд</option>{payload?.brands?.map((brand) => <option key={brand.id} value={brand.id}>{brand.name}</option>)}</select></label><label className="admin-form-label">Тип товара<select value={modelTypeId} onChange={(event) => setModelTypeId(event.target.value)}><option value="">Выберите тип</option>{modelTypeOptions.map((type) => <option key={type.id} value={type.id}>{type.label ?? type.name}</option>)}</select></label></>}

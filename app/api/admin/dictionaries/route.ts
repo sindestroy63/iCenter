@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { csrfMatches, requireDictionaryMutation, requireDictionarySession, sameOrigin } from "@/lib/auth";
 import { adminDb, newId } from "@/lib/admin-db";
-import { DICTIONARY_REGISTRY, sortDictionaryOptions, validateOptionInput, type DictionaryCode } from "@/lib/product-dictionaries";
+import { DICTIONARY_REGISTRY, dictionaryLabelKeyPart, sortDictionaryOptions, validateOptionInput, type DictionaryCode } from "@/lib/product-dictionaries";
 import { catalogColorHex } from "@/lib/catalog-colors";
 import { auditDiff, getDictionarySnapshot, writeAuditLog } from "@/lib/admin-audit";
 
 export const dynamic = "force-dynamic";
 
-const optionSchema = z.object({ id: z.string().trim().min(1).max(100).optional(), canonicalKey: z.string().trim().min(1).max(120), label: z.string().trim().min(1).max(180), nameRu: z.string().trim().max(180).nullable().optional(), aliases: z.array(z.string().trim().min(1).max(180)).max(30).default([]), sortOrder: z.number().int().min(-100000).max(100000).default(0), isActive: z.boolean().default(true), brandId: z.string().trim().min(1).optional(), globalProductTypeId: z.string().trim().min(1).optional(), hex: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional() });
+const optionSchema = z.object({ id: z.string().trim().min(1).max(100).optional(), canonicalKey: z.string().trim().min(1).max(120), label: z.string().trim().min(1).max(180), nameRu: z.string().trim().max(180).nullable().optional(), aliases: z.array(z.string().trim().min(1).max(180)).max(30).default([]), sortOrder: z.number().int().min(-100000).max(100000).default(0), isActive: z.boolean().default(true), brandId: z.string().trim().min(1).optional(), globalProductTypeId: z.string().trim().min(1).optional(), hex: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(), repairConflictingKey: z.boolean().default(false) });
 const definitionSchema = z.object({ id: z.string().trim().min(1).max(100).optional(), code: z.string().regex(/^[a-z][a-z0-9_]*$/).optional(), name: z.string().trim().min(1).max(180), scope: z.literal("VARIANT").default("VARIANT"), valueKind: z.literal("OPTION").default("OPTION"), sortOrder: z.number().int().min(-100000).max(100000).default(0), isFilterable: z.literal(false).default(false), isActive: z.boolean().default(true), productTypeIds: z.array(z.string().trim().min(1)).max(100).default([]) });
 const legacyCodes = new Set<string>();
 const optionCodes = new Set(DICTIONARY_REGISTRY.filter((item) => item.source === "attribute_options").map((item) => item.code));
@@ -36,6 +36,7 @@ async function isCustomDefinition(code: string) {
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "DICTIONARY_FAILED";
   if (message.startsWith("DUPLICATE_KEY:")) return NextResponse.json({ error: message.slice("DUPLICATE_KEY:".length) }, { status: 409 });
+  if (message.startsWith("KEY_REPAIR_REQUIRED:")) return NextResponse.json({ code: "KEY_REPAIR_REQUIRED", error: message.slice("KEY_REPAIR_REQUIRED:".length) }, { status: 409 });
   const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code ?? "") : "";
   const databaseCode = error && typeof error === "object" && "meta" in error && (error as { meta?: unknown }).meta && typeof (error as { meta: object }).meta === "object" && "code" in (error as { meta: { code?: unknown } }).meta ? String((error as { meta: { code?: unknown } }).meta.code ?? "") : "";
   if ([code, databaseCode].some((value) => ["42P01", "42703"].includes(value))) return NextResponse.json({ error: "DICTIONARY_MIGRATION_REQUIRED" }, { status: 503 });
@@ -161,8 +162,22 @@ export async function POST(request: Request) {
       }
       const definition = await tx.$queryRaw<any[]>`SELECT id FROM attribute_definitions WHERE code=${code} LIMIT 1`;
       if (!definition.length) throw new Error("UNKNOWN_DICTIONARY");
-      const existing = await tx.$queryRaw<any[]>`SELECT d.code AS dictionary,o."canonicalKey" AS key,o.id AS "optionId" FROM attribute_options o JOIN attribute_definitions d ON d.id=o."definitionId" UNION ALL SELECT d.code,a."aliasKey",a.id FROM attribute_option_aliases a JOIN attribute_definitions d ON d.id=a."definitionId"`;
-      const issues = validateOptionInput({ dictionary: code as any, canonicalKey: value.canonicalKey, label: value.label, aliases: value.aliases }, existing);
+      let existing = await tx.$queryRaw<any[]>`SELECT d.code AS dictionary,o."canonicalKey" AS key,o.id AS "optionId" FROM attribute_options o JOIN attribute_definitions d ON d.id=o."definitionId" UNION ALL SELECT d.code,a."aliasKey",a.id FROM attribute_option_aliases a JOIN attribute_definitions d ON d.id=a."definitionId"`;
+      let issues = validateOptionInput({ dictionary: code as any, canonicalKey: value.canonicalKey, label: value.label, aliases: value.aliases }, existing);
+      const duplicateKey = issues.find((issue) => issue.code === "DUPLICATE_KEY");
+      const requestedGeneratedKey = `${code}:${dictionaryLabelKeyPart(value.label)}`;
+      if (duplicateKey && value.canonicalKey === requestedGeneratedKey) {
+        const conflict = await tx.$queryRaw<any[]>`SELECT o.id,o.label,o."canonicalKey" FROM attribute_options o WHERE o."definitionId"=${definition[0].id} AND o."canonicalKey"=${value.canonicalKey} LIMIT 1`;
+        const occupied = conflict[0];
+        const correctedKey = occupied ? `${code}:${dictionaryLabelKeyPart(occupied.label)}` : "";
+        if (occupied && correctedKey !== occupied.canonicalKey && validateOptionInput({ dictionary: code as any, canonicalKey: correctedKey, label: occupied.label }, existing.filter((item) => item.optionId !== occupied.id)).length === 0) {
+          if (!value.repairConflictingKey) throw new Error(`KEY_REPAIR_REQUIRED:Существующее значение «${occupied.label}» хранит устаревший ключ «${occupied.canonicalKey}». Исправить его на «${correctedKey}» с сохранением ID, алиасов и связей, затем создать «${value.label}»?`);
+          await tx.$executeRaw`UPDATE attribute_options SET "canonicalKey"=${correctedKey},"updatedAt"=NOW() WHERE id=${occupied.id}`;
+          await writeAuditLog(tx, actor, { action: "dictionary.canonical_key_repaired", entityType: "attribute_option", entityId: occupied.id, changes: { old: { canonicalKey: occupied.canonicalKey }, new: { canonicalKey: correctedKey } }, metadata: { dictionary: code, reason: "compound_label_key_collision" } });
+          existing = existing.map((item) => item.optionId === occupied.id && item.key === occupied.canonicalKey ? { ...item, key: correctedKey } : item);
+          issues = validateOptionInput({ dictionary: code as any, canonicalKey: value.canonicalKey, label: value.label, aliases: value.aliases }, existing);
+        }
+      }
       if (issues.length) {
         const issue = issues[0];
         if (issue.code === "DUPLICATE_KEY" || issue.code === "DUPLICATE_ALIAS") {

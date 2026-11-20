@@ -15,6 +15,7 @@ import {
   sortDictionaryOptions,
   validateCanonicalKey,
   validateOptionInput,
+  dictionaryLabelKeyPart,
 } from "../lib/product-dictionaries.ts";
 
 const checks = [];
@@ -98,6 +99,12 @@ test("canonical keys are constrained and duplicate aliases are rejected", () => 
   assert.equal(validateCanonicalKey("product_type:smartphone"), true);
   assert.equal(validateCanonicalKey("product_model:iphone-18-pro"), true);
   assert.deepEqual(validateOptionInput({ dictionary: "memory", canonicalKey: "bad key", label: "" }).map((issue) => issue.code), ["INVALID_CANONICAL_KEY", "EMPTY_LABEL"]);
+});
+
+test("dictionary label keys preserve every component of compound labels", () => {
+  assert.equal(dictionaryLabelKeyPart("iPhone 18 Pro"), "iphone-18-pro");
+  assert.equal(dictionaryLabelKeyPart("iPhone 18 Pro/17 Pro"), "iphone-18-pro-17-pro");
+  assert.equal(dictionaryLabelKeyPart("iPhone 18 Pro Max/17 Pro Max"), "iphone-18-pro-max-17-pro-max");
 });
 
 test("type applicability uses the configured product family", () => {

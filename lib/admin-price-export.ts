@@ -1,9 +1,9 @@
 import ExcelJS from "exceljs";
-import { createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { APPROVED_AVAILABILITY_OPTIONS, availabilityLabel, availabilitySnapshot } from "@/lib/inventory-availability";
+import { PRICE_EXPORT_FORMAT_ID, PRICE_EXPORT_FORMAT_VERSION, priceExportRowSignature } from "@/lib/admin-price-signature";
 
-export const PRICE_EXPORT_FORMAT_ID = "icenter-price-list";
-export const PRICE_EXPORT_FORMAT_VERSION = "2";
+export { PRICE_EXPORT_FORMAT_ID, PRICE_EXPORT_FORMAT_VERSION, priceExportRowSignature } from "@/lib/admin-price-signature";
 export const MAX_PRICE_EXPORT_ROWS = 10_000;
 
 export type PriceExportRow = {
@@ -221,23 +221,6 @@ function snapshotTime(value: Date | string) {
   return Number.isNaN(date.getTime()) ? text(value) : date.toISOString();
 }
 
-export function priceExportRowSignature(row: Pick<PriceExportRow, "productId" | "variantId" | "cityId" | "inventoryId" | "snapshotUpdatedAt" | "price" | "availability">, exportId: string, signingKey: string) {
-  const price = row.price === null ? null : Number(row.price);
-  const payload = JSON.stringify([
-    PRICE_EXPORT_FORMAT_ID,
-    PRICE_EXPORT_FORMAT_VERSION,
-    exportId,
-    row.productId,
-    row.variantId,
-    row.cityId,
-    row.inventoryId,
-    snapshotTime(row.snapshotUpdatedAt),
-    Number.isSafeInteger(price) ? price : row.price,
-    row.availability,
-  ]);
-  return createHmac("sha256", signingKey).update(payload).digest("base64url");
-}
-
 export async function buildPriceExportWorkbook(rows: PriceExportRow[], metadata: PriceExportMetadata, signingKey: string) {
   if (!signingKey || signingKey.length < 16) throw new Error("EXPORT_SIGNING_KEY_UNAVAILABLE");
   if (rows.length > MAX_PRICE_EXPORT_ROWS) throw new Error("EXPORT_ROW_LIMIT_EXCEEDED");
@@ -321,7 +304,7 @@ export async function buildPriceExportWorkbook(rows: PriceExportRow[], metadata:
       exportId,
       formatId: PRICE_EXPORT_FORMAT_ID,
       formatVersion: PRICE_EXPORT_FORMAT_VERSION,
-      snapshotSignature: priceExportRowSignature({ ...source, availability: originalAvailability }, exportId, signingKey),
+      snapshotSignature: priceExportRowSignature({ ...source, sku: source.sku, availability: originalAvailability }, exportId, signingKey),
     });
     row.height = 24;
     row.alignment = { vertical: "middle", wrapText: true };

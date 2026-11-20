@@ -7,7 +7,8 @@ import { Prisma } from "@prisma/client";
 import { adminDb, newId } from "@/lib/admin-db";
 import { auditInventoryChanges, type InventoryAuditRow } from "@/lib/admin-audit";
 import { getPriceExportOptions } from "@/lib/admin-price-export-data";
-import { MAX_PRICE_EXPORT_ROWS, PRICE_EXPORT_FORMAT_ID, PRICE_EXPORT_FORMAT_VERSION, priceExportRowSignature } from "@/lib/admin-price-export";
+import { MAX_PRICE_EXPORT_ROWS } from "@/lib/admin-price-export";
+import { PRICE_EXPORT_FORMAT_ID, PRICE_EXPORT_FORMAT_VERSION, priceExportRowSignature } from "@/lib/admin-price-signature";
 import { evaluateCityAccess } from "@/lib/city-access-policy";
 import { calculateOldPrice } from "@/lib/product-price";
 import { APPROVED_AVAILABILITY, APPROVED_AVAILABILITY_OPTIONS, availabilityLabelFromSnapshot, availabilitySnapshot, inventoryTupleForAvailability, type ApprovedAvailability } from "@/lib/inventory-availability";
@@ -149,6 +150,7 @@ function parseWorkbook(buffer: Buffer, selectedCityId: string, signingKey: strin
     const exportId = stringValue(cellValue(instructions.getCell("B7")));
     const format = stringValue(cellValue(instructions.getCell("B8")));
     const declaredCount = Number(cellValue(instructions.getCell("B6")));
+    if (format.startsWith(`${PRICE_EXPORT_FORMAT_ID} v`) && format !== `${PRICE_EXPORT_FORMAT_ID} v${PRICE_EXPORT_FORMAT_VERSION}`) throw new Error("IMPORT_TEMPLATE_OUTDATED");
     if (!exportId || format !== `${PRICE_EXPORT_FORMAT_ID} v${PRICE_EXPORT_FORMAT_VERSION}` || !Number.isInteger(declaredCount) || declaredCount < 0 || declaredCount > MAX_PRICE_EXPORT_ROWS) throw new Error("IMPORT_FORMAT_INVALID");
 
     for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
@@ -190,12 +192,13 @@ function parseWorkbook(buffer: Buffer, selectedCityId: string, signingKey: strin
           productId: row.productId,
           variantId: row.variantId,
           cityId: row.cityId,
+          sku: row.sku,
           inventoryId: row.inventoryId,
           snapshotUpdatedAt: row.snapshotUpdatedAt,
           price: originalPrice,
           availability: originalAvailability,
         }, exportId, signingKey);
-        if (!equalSignature(row.signature, calculated)) addError(row, "Подпись исходных значений не совпадает.");
+        if (!equalSignature(row.signature, calculated)) addError(row, "Подпись исходных значений не совпадает. Скачайте новый экспорт и повторите импорт.");
 
         const priceCell = values[10];
         const priceValue = integerPrice(priceCell);
@@ -314,6 +317,7 @@ function verifySnapshotRows(payload: PreviewToken, signingKey: string) {
       productId: row.productId,
       variantId: row.variantId,
       cityId: row.cityId,
+      sku: row.sku,
       inventoryId: row.inventoryId,
       snapshotUpdatedAt: row.snapshotUpdatedAt,
       price: row.originalPrice,
