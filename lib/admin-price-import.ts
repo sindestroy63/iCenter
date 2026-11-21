@@ -266,8 +266,9 @@ function compareSnapshot(row: ImportRow, current: CurrentRow | undefined) {
     if (canonicalDate(current.inventoryUpdatedAt!) !== canonicalDate(row.snapshotUpdatedAt)) return "Inventory изменён после экспорта.";
     if (snapshotPrice(current.price) !== snapshotPrice(row.originalPrice) || availabilitySnapshot(current) !== row.originalAvailability) return "Исходные значения Inventory изменились после экспорта.";
   } else {
-    if (current.inventoryId && !isEmptyInventory(current)) return current.inventoryActive ? "После экспорта для города появилась запись Inventory с актуальными данными; сначала проверьте её в выбранном городе." : "Для варианта есть скрытая неактивная запись Inventory; импорт не будет её активировать.";
-    if (canonicalDate(current.sourceUpdatedAt) !== canonicalDate(row.snapshotUpdatedAt)) return "Товар или вариант изменён после экспорта.";
+    if (current.inventoryId) {
+      if (!isEmptyInventory(current)) return current.inventoryActive ? "После экспорта для города появилась запись Inventory с актуальными данными; сначала проверьте её в выбранном городе." : "Для варианта есть скрытая неактивная запись Inventory; импорт не будет её активировать.";
+    } else if (canonicalDate(current.sourceUpdatedAt) !== canonicalDate(row.snapshotUpdatedAt)) return "Товар или вариант изменён после экспорта.";
   }
   return "";
 }
