@@ -169,6 +169,8 @@ export default function AdminProductsBackend({ mode="standard" }: { mode?: "stan
   const tradeInMode=mode==="tradeIn";
   const [payload,setPayload]=useState<Payload|null>(null);
   const [media,setMedia]=useState<Media[]>([]);
+  const [mediaLoading,setMediaLoading]=useState(true);
+  const [mediaError,setMediaError]=useState("");
   const [editing,setEditing]=useState<Product|null>(null);
   const [tab,setTab]=useState<Tab>("main");
   const [selectedVariant,setSelectedVariant]=useState(0);
@@ -207,7 +209,7 @@ export default function AdminProductsBackend({ mode="standard" }: { mode?: "stan
   const load=async () => {
     setLoadError("");
     try {
-      const [productsResponse,mediaResponse]=await Promise.all([fetch(`/api/admin/products?scope=${tradeInMode?"used":"new"}`,{ cache: "no-store" }),fetch("/api/admin/media",{ cache: "no-store" })]);
+      const productsResponse=await fetch(`/api/admin/products?scope=${tradeInMode?"used":"new"}`,{ cache: "no-store" });
       const productsData=await productsResponse.json().catch(() => ({}));
       if(!productsResponse.ok)
         throw new Error(productsData.error||(productsResponse.status===401? "Сессия истекла. Войдите снова.":`Не удалось загрузить каталог (${productsResponse.status}).`));
@@ -218,12 +220,15 @@ export default function AdminProductsBackend({ mode="standard" }: { mode?: "stan
       setOrderedIds(loadedIds);
       setSavedOrderIds(loadedIds);
       setOrderPage(1);
-      if(mediaResponse.ok) {
-        const mediaData=await mediaResponse.json();
+      setMediaLoading(true); setMediaError("");
+      try {
+        const mediaResponse=await fetch("/api/admin/media",{ cache: "no-store" });
+        const mediaData=await mediaResponse.json().catch(() => ({}));
+        if(!mediaResponse.ok) throw new Error(mediaData.error||`Не удалось загрузить медиатеку (${mediaResponse.status}).`);
         setMedia(Array.isArray(mediaData.data)? mediaData.data:[]);
-      }
-      else
-        setMedia([]);
+      } catch(error) {
+        setMedia([]); setMediaError(error instanceof Error?error.message:"Не удалось загрузить медиатеку.");
+      } finally { setMediaLoading(false); }
     }
     catch(error) {
       setLoadError(error instanceof Error? error.message:"Не удалось загрузить каталог.");
@@ -500,7 +505,7 @@ const activeType=payload?.options.types.find((item) => item.id===editing?.global
       if(event.target===event.currentTarget)
         closeEditor();
     }}>
-      <ProductEditor title={editing.id?(tradeInMode?"Редактирование б/у товара":"Редактирование товара"):(tradeInMode?"Новый б/у товар":"Новый товар")} editing={editing} payload={payload} media={media} activeTab={tab} setActiveTab={setTab} selectedVariant={selectedVariant} setSelectedVariant={setSelectedVariant} activeType={activeType} dirty={dirty} error={formError} busy={busy} setField={setField} setVariantField={setVariantField} setInventoryField={setInventoryField} setImageField={setImageField} addVariant={() => { const nextIndex=editing.variants.length; update({ variants: [...editing.variants,emptyVariant()] }); setSelectedVariant(nextIndex); setDirty(true); }} deleteVariant={async (index) => {
+      <ProductEditor title={editing.id?(tradeInMode?"Редактирование б/у товара":"Редактирование товара"):(tradeInMode?"Новый б/у товар":"Новый товар")} editing={editing} payload={payload} media={media} mediaLoading={mediaLoading} mediaError={mediaError} reloadMedia={async()=>{setMediaLoading(true);setMediaError("");try{const response=await fetch("/api/admin/media",{cache:"no-store"});const result=await response.json().catch(()=>({}));if(!response.ok)throw new Error(result.error||"Не удалось загрузить медиатеку.");setMedia(Array.isArray(result.data)?result.data:[]);}catch(error){setMediaError(error instanceof Error?error.message:"Не удалось загрузить медиатеку.");}finally{setMediaLoading(false);}}} activeTab={tab} setActiveTab={setTab} selectedVariant={selectedVariant} setSelectedVariant={setSelectedVariant} activeType={activeType} dirty={dirty} error={formError} busy={busy} setField={setField} setVariantField={setVariantField} setInventoryField={setInventoryField} setImageField={setImageField} addVariant={() => { const nextIndex=editing.variants.length; update({ variants: [...editing.variants,emptyVariant()] }); setSelectedVariant(nextIndex); setDirty(true); }} deleteVariant={async (index) => {
         const variant=editing.variants[index];
         if(!variant?.id||!editing.id||!window.confirm(`Удалить вариант «${variant.label||"Вариант"}» (SKU ${variant.sku})?`)) return;
         setBusy(true); setFormError("");
@@ -537,6 +542,9 @@ function ProductEditor(props: {
   editing: Product;
   payload: Payload;
   media: Media[];
+  mediaLoading: boolean;
+  mediaError: string;
+  reloadMedia: () => Promise<void>;
   activeTab: Tab;
   setActiveTab: (tab: Tab) => void;
   selectedVariant: number;
@@ -631,7 +639,7 @@ function ProductEditor(props: {
             {expanded&&variant&&<div className="admin-variant-detail">
               <section className="admin-variant-block"><div className="admin-variant-block-head"><div><h4>Характеристики</h4></div></div><div className="admin-variant-core-grid"><label>SKU<input readOnly value={variant.sku??"Создаётся автоматически"}/></label><label className="admin-check"><input type="checkbox" checked={variant.active} onChange={(event)=>props.setVariantField(index,{active:event.target.checked})}/>Вариант активен</label></div><VariantAttributesEditor key={variant.id??index} variant={variant} variantKey={variant.id??index} productTypeKey={props.activeType?.globalTypeKey??""} options={registeredOptions} definitions={registeredDefinitions} colors={payload.options.colors} onColorChange={(colorId)=>props.setVariantField(index,{colorId})} onChange={(dictionaryOptionIds,attributes,changedCode,optionId)=>updateVariantAttributes(index,dictionaryOptionIds,attributes,changedCode,optionId)}/></section>
               <section className="admin-variant-block"><div className="admin-variant-block-head"><div><h4>Цены и доступность по городам</h4></div></div><div className="admin-city-table-wrap"><table className="admin-city-table"><thead><tr><th>Город</th><th>Цена</th><th>Старая цена</th><th>Доступность</th></tr></thead><tbody>{payload.options.cities.map((city)=>{const inventory=variant.inventory[city.id]??inventoryFor(city);const approved=approvedAvailability(inventory);const selectValue=approved??"__LEGACY__";return <tr key={city.id}><th>{city.name}</th><td><input aria-label={`Цена, ${city.name}`} type="number" min="0" step="1" value={inventory.price??""} onChange={(event)=>props.setInventoryField(index,city.id,{price:event.target.value===""?null:Number(event.target.value),...(event.target.value!==""&&inventory.availability==="UNSPECIFIED"?inventoryTupleForAvailability("IN_STOCK"):{})})}/></td><td className="admin-calculated-price"><input aria-label={`Старая цена, ${city.name}`} type="number" readOnly aria-readonly="true" value={calculateOldPrice(inventory.price)??""}/><small>+15%, вверх до 990</small></td><td><select aria-label={`Доступность, ${city.name}`} value={selectValue} onChange={(event)=>props.setInventoryField(index,city.id,inventoryTupleForAvailability(event.target.value as ApprovedAvailability))}>{!approved&&<option value="__LEGACY__" disabled>Прежнее значение: {inventoryAvailabilityLabel(inventory)}</option>}{APPROVED_AVAILABILITY_OPTIONS.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></td></tr>})}</tbody></table></div></section>
-              <section className="admin-variant-block"><ProductGalleryPanel title="Фотографии" images={editing.images} variantId={variant.id??null} variantKey={variant.draftKey??null} scopeColorId={variant.colorId} colorName={payload.options.colors.find((entry)=>entry.id===variant.colorId)?.name??null} media={media} upload={props.upload} addImage={props.addImage} setImageField={props.setImageField} makeMainImage={props.makeMainImage} removeImage={props.removeImage}/></section>
+              <section className="admin-variant-block"><ProductGalleryPanel title="Фотографии" images={editing.images} variantId={variant.id??null} variantKey={variant.draftKey??null} scopeColorId={variant.colorId} colorName={payload.options.colors.find((entry)=>entry.id===variant.colorId)?.name??null} media={media} mediaLoading={props.mediaLoading} mediaError={props.mediaError} reloadMedia={props.reloadMedia} upload={props.upload} addImage={props.addImage} setImageField={props.setImageField} makeMainImage={props.makeMainImage} removeImage={props.removeImage}/></section>
               {!variant.id&&!tradeInMode&&<section className="admin-variant-block admin-variant-actions"><div><h4>Дополнительные действия</h4><p>Удаление касается только несохранённого варианта.</p></div><button type="button" className="admin-danger" onClick={() => { if(window.confirm("Удалить новый вариант?")) { props.removeVariant(index); setExpandedVariant(null); } }}><Trash2 size={15}/>Удалить вариант</button></section>}
             </div>}
           </div>; })}</div>
@@ -720,6 +728,9 @@ function ProductGalleryPanel(props: {
   scopeColorId: string|null;
   colorName: string|null;
   media: Media[];
+  mediaLoading: boolean;
+  mediaError: string;
+  reloadMedia: () => Promise<void>;
   upload: (file: File,variantId: string|null,variantKey: string|null) => Promise<void>;
   addImage: (mediaId: string,variantId: string|null,variantKey: string|null) => void;
   setImageField: (index: number,patch: Partial<ImageLink>) => void;
@@ -731,6 +742,7 @@ function ProductGalleryPanel(props: {
   const [pickerIndex,setPickerIndex]=useState<number|null|"new">(null);
   const [mediaQuery,setMediaQuery]=useState("");
   const [preview,setPreview]=useState<Media|null>(null);
+  const [mediaLimit,setMediaLimit]=useState(100);
   const exactImages=props.images.map((image,index) => ({ image,index,isFallback:false })).filter(({ image }) => props.variantId?image.variantId===props.variantId:image.variantKey===props.variantKey);
   const colorFallback=props.scopeColorId?props.images.map((image,index) => ({ image,index,isFallback:true })).filter(({ image }) => !image.variantId&&!image.variantKey&&image.colorId===props.scopeColorId):[];
   const sharedFallback=props.images.map((image,index) => ({ image,index,isFallback:true })).filter(({ image }) => !image.variantId&&!image.variantKey&&image.colorId===null);
@@ -739,6 +751,7 @@ function ProductGalleryPanel(props: {
   const mainIndex=images[0]?.index;
   const selectedMediaIds=new Set(exactImages.map(({image})=>image.mediaId));
   const filteredMedia=useMemo(()=>{const query=mediaQuery.trim().toLocaleLowerCase("ru-RU");return query?props.media.filter((item)=>item.filename.toLocaleLowerCase("ru-RU").includes(query)):props.media;},[mediaQuery,props.media]);
+  const visibleMedia=filteredMedia.slice(0,mediaLimit);
   const addUpload=async (event: ChangeEvent<HTMLInputElement>) => {
     const file=event.currentTarget.files?.[0];
     event.currentTarget.value="";
@@ -771,7 +784,7 @@ function ProductGalleryPanel(props: {
         </div>
       </article>;
     })}</div>:<div className="admin-product-empty-images">В этой галерее пока нет фото. Выберите изображение из медиатеки или загрузите его.</div>}
-    {pickerIndex!==null&&<div className="admin-modal-backdrop admin-media-picker-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)setPickerIndex(null);}}><section className="admin-modal admin-media-picker" role="dialog" aria-modal="true" aria-labelledby="media-picker-title"><header><h2 id="media-picker-title">Выбрать фотографию</h2><button type="button" className="icon-action" aria-label="Закрыть" onClick={()=>setPickerIndex(null)}><X size={18}/></button></header><div className="admin-modal-body"><label className="admin-field-search"><Search size={17}/><input autoFocus value={mediaQuery} onChange={(event)=>setMediaQuery(event.target.value)} placeholder="Поиск по названию файла"/></label>{filteredMedia.length?<div className="admin-media-picker-grid">{filteredMedia.map((item)=>{const selected=selectedMediaIds.has(item.id);return <article className={selected?"is-selected":""} key={item.id}><button type="button" className="admin-media-picker-choice" disabled={selected&&pickerIndex==="new"} onClick={()=>{if(pickerIndex==="new")props.addImage(item.id,props.variantId,props.variantKey);else props.setImageField(pickerIndex,{mediaId:item.id});setPickerIndex(null);setMediaQuery("");}}><span>{item.url?<img src={item.url} alt={item.alt||item.filename} loading="lazy"/>:<span className="admin-media-picker-missing">Нет изображения</span>}</span><strong title={item.filename}>{item.filename}</strong>{selected&&<small>Уже выбрано</small>}</button><button type="button" className="icon-action admin-media-preview-button" aria-label={`Открыть ${item.filename}`} title="Увеличить" onClick={()=>setPreview(item)}><Eye size={16}/></button></article>;})}</div>:<div className="admin-product-empty-images">Изображения не найдены.</div>}</div></section></div>}
+    {pickerIndex!==null&&<div className="admin-modal-backdrop admin-media-picker-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)setPickerIndex(null);}}><section className="admin-modal admin-media-picker" role="dialog" aria-modal="true" aria-labelledby="media-picker-title"><header><h2 id="media-picker-title">Выбрать фотографию</h2><button type="button" className="icon-action" aria-label="Закрыть" onClick={()=>setPickerIndex(null)}><X size={18}/></button></header><div className="admin-modal-body"><label className="admin-field-search"><Search size={17}/><input autoFocus value={mediaQuery} onChange={(event)=>{setMediaQuery(event.target.value);setMediaLimit(100);}} placeholder="Поиск по названию файла"/></label>{props.mediaLoading?<p className="admin-note" role="status">Загрузка медиатеки…</p>:props.mediaError?<div className="admin-products-load-error" role="alert"><p>{props.mediaError}</p><button type="button" className="admin-secondary" onClick={()=>void props.reloadMedia()}>Повторить загрузку</button></div>:filteredMedia.length?<><div className="admin-media-picker-grid">{visibleMedia.map((item)=>{const selected=selectedMediaIds.has(item.id);return <article className={selected?"is-selected":""} key={item.id}><button type="button" className="admin-media-picker-choice" disabled={selected&&pickerIndex==="new"} onClick={()=>{if(pickerIndex==="new")props.addImage(item.id,props.variantId,props.variantKey);else props.setImageField(pickerIndex,{mediaId:item.id});setPickerIndex(null);setMediaQuery("");}}><span>{item.url?<><img src={item.url} alt={item.alt||item.filename} loading="lazy" onError={(event)=>{event.currentTarget.hidden=true;const fallback=event.currentTarget.nextElementSibling;if(fallback instanceof HTMLElement)fallback.hidden=false;}}/><span className="admin-media-picker-missing" hidden>Предпросмотр недоступен</span></>:<span className="admin-media-picker-missing">Нет изображения</span>}</span><strong title={item.filename}>{item.filename}</strong>{selected&&<small>Уже выбрано</small>}</button><button type="button" className="icon-action admin-media-preview-button" aria-label={`Открыть ${item.filename}`} title="Увеличить" onClick={()=>setPreview(item)}><Eye size={16}/></button></article>;})}</div>{visibleMedia.length<filteredMedia.length&&<button type="button" className="admin-secondary" onClick={()=>setMediaLimit((count)=>count+100)}>Показать еще {Math.min(100,filteredMedia.length-visibleMedia.length)} из {filteredMedia.length-visibleMedia.length}</button>}</>:<div className="admin-product-empty-images">Изображения не найдены.</div>}</div></section></div>}
     {preview&&<div className="admin-modal-backdrop admin-media-preview" onMouseDown={(event)=>{if(event.target===event.currentTarget)setPreview(null);}}><section role="dialog" aria-modal="true" aria-label={preview.filename}><button type="button" className="icon-action" aria-label="Закрыть" onClick={()=>setPreview(null)}><X size={20}/></button><img src={preview.url} alt={preview.alt||preview.filename}/><strong>{preview.filename}</strong></section></div>}
   </section>;
 }

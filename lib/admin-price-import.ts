@@ -266,10 +266,20 @@ function compareSnapshot(row: ImportRow, current: CurrentRow | undefined) {
     if (canonicalDate(current.inventoryUpdatedAt!) !== canonicalDate(row.snapshotUpdatedAt)) return "Inventory изменён после экспорта.";
     if (snapshotPrice(current.price) !== snapshotPrice(row.originalPrice) || availabilitySnapshot(current) !== row.originalAvailability) return "Исходные значения Inventory изменились после экспорта.";
   } else {
-    if (current.inventoryId) return current.inventoryActive ? "После экспорта для города появилась запись Inventory." : "Для варианта есть скрытая неактивная запись Inventory; импорт не будет её активировать.";
+    if (current.inventoryId && !isEmptyInventory(current)) return current.inventoryActive ? "После экспорта для города появилась запись Inventory с актуальными данными; сначала проверьте её в выбранном городе." : "Для варианта есть скрытая неактивная запись Inventory; импорт не будет её активировать.";
     if (canonicalDate(current.sourceUpdatedAt) !== canonicalDate(row.snapshotUpdatedAt)) return "Товар или вариант изменён после экспорта.";
   }
   return "";
+}
+
+function isEmptyInventory(current: CurrentRow) {
+  return current.inventoryActive === true
+    && current.price === null
+    && current.oldPrice === null
+    && (current.availability === null || current.availability === "UNSPECIFIED")
+    && current.stock === null
+    && current.allowPreorder !== true
+    && current.deliveryTime === null;
 }
 
 function compareIdentity(row: ImportRow, current: CurrentRow | undefined) {
@@ -401,7 +411,8 @@ export async function confirmPriceImport(session: ImportSession, previewToken: s
       const nextAvailability = availabilityChanged
         ? inventoryTupleForAvailability(row.availability as ApprovedAvailability)
         : { availability: current.availability ?? "UNSPECIFIED", allowPreorder: current.allowPreorder ?? false, deliveryTime: current.deliveryTime };
-      if (row.inventoryId) {
+      if (row.inventoryId || current.inventoryId) {
+        const adoptingEmptyRow = !row.inventoryId && current.inventoryId !== null;
         const result = await tx.$queryRaw<CurrentRow[]>(Prisma.sql`
           UPDATE inventory SET
             price=CASE WHEN ${row.changes.includes("price")} THEN ${row.price}::numeric ELSE price END,
@@ -410,7 +421,9 @@ export async function confirmPriceImport(session: ImportSession, previewToken: s
             "allowPreorder"=CASE WHEN ${availabilityChanged} THEN ${nextAvailability.allowPreorder} ELSE "allowPreorder" END,
             "deliveryTime"=CASE WHEN ${availabilityChanged} THEN ${nextAvailability.deliveryTime} ELSE "deliveryTime" END,
             "updatedAt"=NOW()
-          WHERE id=${row.inventoryId} AND "cityId"=${payload.cityId} AND "isActive"=TRUE AND "updatedAt"=${row.snapshotUpdatedAt}::timestamptz
+          WHERE id=${row.inventoryId ?? current.inventoryId} AND "cityId"=${payload.cityId} AND "isActive"=TRUE
+            AND "updatedAt"=${adoptingEmptyRow ? canonicalDate(current.inventoryUpdatedAt!) : row.snapshotUpdatedAt}::timestamptz
+            AND (${!adoptingEmptyRow} OR (price IS NULL AND "oldPrice" IS NULL AND availability='UNSPECIFIED'::"AvailabilityStatus" AND stock IS NULL AND "allowPreorder"=FALSE AND "deliveryTime" IS NULL))
           RETURNING id AS "inventoryId", "variantId", "cityId", price::text AS price, "oldPrice"::text AS "oldPrice", stock,
             availability::text AS availability, "allowPreorder", "deliveryTime", "isActive" AS "inventoryActive"
         `);
